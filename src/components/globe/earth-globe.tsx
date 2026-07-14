@@ -414,7 +414,8 @@ function Scene({
         enablePan={false}
         maxDistance={6}
         minDistance={1.8}
-        rotateSpeed={0.6}
+        // A bit snappier orbit; zoom left alone
+        rotateSpeed={1.05}
         zoomSpeed={0.75}
       />
     </>

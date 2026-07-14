@@ -1,10 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
-import { BlurView } from "expo-blur";
 import * as Haptics from "expo-haptics";
 import type { JSX } from "react";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
-  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -38,9 +36,7 @@ const MINUTE_MS = 60_000;
 const SCRUB_COMMIT_MIN_MS = 120;
 
 /**
- * Floating glass Time Travel card.
- * One shell + BlurView (same pattern as the tab bar) — no nested full-bleed
- * backgrounds that read as a second card behind the track.
+ * Floating Time Travel card — solid fill (same language as the tab bar shell).
  */
 export function TimeTravelBar({ dark }: Props): JSX.Element {
   const colorScheme = useColorScheme();
@@ -188,17 +184,6 @@ export function TimeTravelBar({ dark }: Props): JSX.Element {
 
   return (
     <View style={[styles.card, isDark ? styles.cardDark : styles.cardLight]}>
-      {/* Single glass layer clipped to the card radius — same idea as tab bar */}
-      <BlurView
-        blurMethod={
-          Platform.OS === "android" ? "dimezisBlurViewSdk31Plus" : undefined
-        }
-        blurReductionFactor={isDark ? 2 : 4}
-        intensity={isDark ? 90 : 48}
-        style={StyleSheet.absoluteFill}
-        tint={isDark ? "dark" : "systemUltraThinMaterialLight"}
-      />
-
       <View style={styles.content}>
         <View style={styles.headerRow}>
           <Pressable
@@ -275,7 +260,6 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     elevation: 10,
     marginHorizontal: 16,
-    // Clip BlurView to the rounded rect so nothing peeks outside as a 2nd plate
     overflow: "hidden",
     shadowColor: "#000000",
     shadowOffset: { height: 8, width: 0 },
@@ -283,12 +267,12 @@ const styles = StyleSheet.create({
     shadowRadius: 16,
   },
   cardDark: {
-    // Same translucent shell language as the floating tab bar
-    backgroundColor: "rgba(20, 20, 22, 0.42)",
-    borderColor: "rgba(255, 255, 255, 0.16)",
+    // Solid shell matching the floating tab bar
+    backgroundColor: "rgba(28, 28, 30, 0.94)",
+    borderColor: "rgba(255, 255, 255, 0.14)",
   },
   cardLight: {
-    backgroundColor: "rgba(255, 255, 255, 0.55)",
+    backgroundColor: "rgba(255, 255, 255, 0.94)",
     borderColor: "rgba(0, 0, 0, 0.05)",
     shadowOpacity: 0.08,
   },
