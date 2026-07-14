@@ -2,6 +2,7 @@
   "expo": {
     "name": "Chrona",
     "slug": "chrona-clock-app",
+    "owner": "thommysart24",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -11,9 +12,10 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.thommysart24.chrona",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#0c0c0e"
+        "backgroundColor": "#eeeeee"
       },
       "predictiveBackGestureEnabled": false
     },
@@ -25,7 +27,7 @@
         {
           "image": "./assets/images/splash-icon.png",
           "resizeMode": "contain",
-          "backgroundColor": "#0c0c0e"
+          "backgroundColor": "#eeeeee"
         }
       ],
       "expo-status-bar",
@@ -35,6 +37,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "4945cf20-7756-46ef-9bd1-8e50d535bbd6"
+      }
     }
   }
 }
