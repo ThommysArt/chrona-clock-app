@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
-import { STORAGE_KEYS, TIME_TRAVEL_RANGE_MS, TICK_MS } from "@/lib/constants";
-import { loadJson, saveJson } from "@/lib/storage";
+import { TIME_TRAVEL_RANGE_MS, TICK_MS } from "@/lib/constants";
+import * as db from "@/lib/db";
 import { appInstant } from "@/lib/time";
 
 type TimeState = {
@@ -11,6 +11,7 @@ type TimeState = {
   nowMs: number;
   /** True while the user is dragging Time Travel (UI can stay light) */
   isScrubbing: boolean;
+  ready: boolean;
   setOffsetMs: (ms: number) => void;
   resetToNow: () => void;
   /**
@@ -33,16 +34,21 @@ function snapMinute(ms: number): number {
   return Math.round(ms / minute) * minute;
 }
 
-const initialOffset = clampOffset(loadJson(STORAGE_KEYS.offsetMs, 0));
+function writeOffsetMs(offsetMs: number): void {
+  void db.saveOffsetMs(offsetMs).catch((e) => {
+    console.warn("[chrona] failed to persist offsetMs", e);
+  });
+}
 
 export const useTimeStore = create<TimeState>((set, get) => ({
-  offsetMs: initialOffset,
-  nowMs: appInstant(initialOffset).epochMilliseconds,
+  offsetMs: 0,
+  nowMs: Date.now(),
   isScrubbing: false,
+  ready: false,
 
   setOffsetMs: (ms) => {
     const offsetMs = clampOffset(ms);
-    saveJson(STORAGE_KEYS.offsetMs, offsetMs);
+    writeOffsetMs(offsetMs);
     set({
       offsetMs,
       nowMs: Date.now() + offsetMs,
@@ -69,7 +75,7 @@ export const useTimeStore = create<TimeState>((set, get) => ({
       finalMs === undefined
         ? get().offsetMs
         : snapMinute(clampOffset(finalMs));
-    saveJson(STORAGE_KEYS.offsetMs, offsetMs);
+    writeOffsetMs(offsetMs);
     set({
       isScrubbing: false,
       offsetMs,
@@ -79,7 +85,7 @@ export const useTimeStore = create<TimeState>((set, get) => ({
   },
 
   resetToNow: () => {
-    saveJson(STORAGE_KEYS.offsetMs, 0);
+    writeOffsetMs(0);
     set({
       offsetMs: 0,
       isScrubbing: false,
@@ -98,8 +104,7 @@ export const useTimeStore = create<TimeState>((set, get) => ({
 
 /** @deprecated prefer endScrub — kept for call sites */
 export function persistOffset(): void {
-  const { offsetMs } = useTimeStore.getState();
-  saveJson(STORAGE_KEYS.offsetMs, offsetMs);
+  writeOffsetMs(useTimeStore.getState().offsetMs);
 }
 
 let tickTimer: ReturnType<typeof setInterval> | null = null;
@@ -115,4 +120,14 @@ export function startTimeEngine(): () => void {
       tickTimer = null;
     }
   };
+}
+
+export async function hydrateTimeStore(offsetMs?: number): Promise<void> {
+  const raw = offsetMs ?? (await db.loadOffsetMs());
+  const clamped = clampOffset(raw);
+  useTimeStore.setState({
+    offsetMs: clamped,
+    nowMs: appInstant(clamped).epochMilliseconds,
+    ready: true,
+  });
 }

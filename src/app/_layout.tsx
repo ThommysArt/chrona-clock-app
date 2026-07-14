@@ -11,12 +11,15 @@ import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import { HeroUINativeProvider } from "heroui-native";
 import type { JSX } from "react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useColorScheme, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 
-import { ACCENT } from "@/lib/constants";
-import { startTimeEngine } from "@/store/time-store";
+import { ACCENT, DEFAULT_CITIES } from "@/lib/constants";
+import { bootstrapDatabase } from "@/lib/db";
+import { hydrateCitiesStore } from "@/store/cities-store";
+import { hydrateSettingsStore } from "@/store/settings-store";
+import { hydrateTimeStore, startTimeEngine } from "@/store/time-store";
 
 import "../global.css";
 
@@ -31,18 +34,54 @@ export default function RootLayout(): JSX.Element | null {
     Manrope_700Bold,
     Manrope_800ExtraBold,
   });
+  const [dbReady, setDbReady] = useState(false);
 
   useEffect(() => {
-    return startTimeEngine();
+    let cancelled = false;
+    void (async () => {
+      try {
+        const snapshot = await bootstrapDatabase();
+        if (cancelled) return;
+        await Promise.all([
+          hydrateCitiesStore({
+            cities: snapshot.cities,
+            customPlaces: snapshot.customPlaces,
+          }),
+          hydrateSettingsStore(snapshot.settings),
+          hydrateTimeStore(snapshot.offsetMs),
+        ]);
+      } catch (e) {
+        console.warn("[chrona] database bootstrap failed", e);
+        // In-memory defaults so the UI still launches
+        await hydrateCitiesStore({
+          cities: DEFAULT_CITIES.map((c) => ({ ...c })),
+          customPlaces: [],
+        }).catch(() => undefined);
+        await hydrateSettingsStore({
+          use24Hour: true,
+          theme: "system",
+        }).catch(() => undefined);
+        await hydrateTimeStore(0).catch(() => undefined);
+      }
+      if (!cancelled) setDbReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
-    if (fontsLoaded) {
+    if (!dbReady) return;
+    return startTimeEngine();
+  }, [dbReady]);
+
+  useEffect(() => {
+    if (fontsLoaded && dbReady) {
       void SplashScreen.hideAsync();
     }
-  }, [fontsLoaded]);
+  }, [fontsLoaded, dbReady]);
 
-  if (!fontsLoaded) {
+  if (!fontsLoaded || !dbReady) {
     return (
       <View
         style={{

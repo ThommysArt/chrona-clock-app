@@ -13,12 +13,6 @@ export const TIME_TRAVEL_RANGE_MS = 12 * 60 * 60 * 1000;
 /** Tick interval for live clock updates */
 export const TICK_MS = 1000;
 
-export const STORAGE_KEYS = {
-  cities: "chrona.cities",
-  settings: "chrona.settings",
-  offsetMs: "chrona.offsetMs",
-} as const;
-
 /** Default saved cities matching product screenshots */
 export const DEFAULT_CITIES = [
   {

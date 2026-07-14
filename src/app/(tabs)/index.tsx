@@ -62,7 +62,9 @@ export default function ListTab(): JSX.Element {
               isFirst={index === 0}
               isLast={index === cities.length - 1}
               key={city.id}
-              onRemove={() => removeCity(city.id)}
+              onRemove={() => {
+                void removeCity(city.id);
+              }}
             />
           ))
         )}

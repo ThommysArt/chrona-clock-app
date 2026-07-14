@@ -1,42 +1,58 @@
 import { create } from "zustand";
 
-import { STORAGE_KEYS } from "@/lib/constants";
-import { loadJson, saveJson } from "@/lib/storage";
+import * as db from "@/lib/db";
+import type { AppSettings, ThemePreference } from "@/lib/db";
 
-export type ThemePreference = "light" | "dark" | "system";
+export type { ThemePreference };
 
 type SettingsState = {
   use24Hour: boolean;
   theme: ThemePreference;
-  setUse24Hour: (value: boolean) => void;
-  setTheme: (theme: ThemePreference) => void;
+  ready: boolean;
+  setUse24Hour: (value: boolean) => Promise<void>;
+  setTheme: (theme: ThemePreference) => Promise<void>;
 };
 
-type PersistedSettings = {
-  use24Hour: boolean;
-  theme: ThemePreference;
-};
-
-const defaults: PersistedSettings = {
+const defaults: AppSettings = {
   use24Hour: true,
   theme: "system",
 };
 
-const loaded = loadJson<PersistedSettings>(STORAGE_KEYS.settings, defaults);
-
 export const useSettingsStore = create<SettingsState>((set, get) => ({
-  use24Hour: loaded.use24Hour ?? true,
-  theme: loaded.theme ?? "system",
+  use24Hour: defaults.use24Hour,
+  theme: defaults.theme,
+  ready: false,
 
-  setUse24Hour: (value) => {
-    const next = { use24Hour: value, theme: get().theme };
-    saveJson(STORAGE_KEYS.settings, next);
+  setUse24Hour: async (value) => {
+    const prev = get().use24Hour;
     set({ use24Hour: value });
+    try {
+      await db.saveSettings({ use24Hour: value, theme: get().theme });
+    } catch (e) {
+      console.warn("[chrona] failed to persist use24Hour", e);
+      set({ use24Hour: prev });
+    }
   },
 
-  setTheme: (theme) => {
-    const next = { use24Hour: get().use24Hour, theme };
-    saveJson(STORAGE_KEYS.settings, next);
+  setTheme: async (theme) => {
+    const prev = get().theme;
     set({ theme });
+    try {
+      await db.saveSettings({ use24Hour: get().use24Hour, theme });
+    } catch (e) {
+      console.warn("[chrona] failed to persist theme", e);
+      set({ theme: prev });
+    }
   },
 }));
+
+export async function hydrateSettingsStore(
+  snapshot?: AppSettings
+): Promise<void> {
+  const next = snapshot ?? (await db.loadSettings());
+  useSettingsStore.setState({
+    use24Hour: next.use24Hour ?? true,
+    theme: next.theme ?? "system",
+    ready: true,
+  });
+}
