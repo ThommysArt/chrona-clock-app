@@ -1,8 +1,10 @@
 import { Ionicons } from "@expo/vector-icons";
+import { BlurView } from "expo-blur";
 import * as Haptics from "expo-haptics";
 import type { JSX } from "react";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -32,18 +34,19 @@ type Props = {
 };
 
 const MINUTE_MS = 60_000;
+/** Max rate we push scrub minutes into JS/Zustand — thumb never waits on this */
+const SCRUB_COMMIT_MIN_MS = 120;
 
 /**
- * Time Travel slider.
- *
- * Thumb/fill move entirely on the UI thread. We only bridge into JS when the
- * snapped minute bucket actually changes (or on release) — that stops the
- * previous “recompute every pan pixel” lag.
+ * Floating glass Time Travel card.
+ * One shell + BlurView (same pattern as the tab bar) — no nested full-bleed
+ * backgrounds that read as a second card behind the track.
  */
 export function TimeTravelBar({ dark }: Props): JSX.Element {
   const colorScheme = useColorScheme();
   const isDark = dark ?? colorScheme === "dark";
   const offsetMs = useTimeStore((s) => s.offsetMs);
+  const isScrubbing = useTimeStore((s) => s.isScrubbing);
   const scrubOffsetMs = useTimeStore((s) => s.scrubOffsetMs);
   const beginScrub = useTimeStore((s) => s.beginScrub);
   const endScrub = useTimeStore((s) => s.endScrub);
@@ -54,15 +57,17 @@ export function TimeTravelBar({ dark }: Props): JSX.Element {
   const trackWidth = useSharedValue(1);
   const startOffset = useSharedValue(0);
   const liveOffset = useSharedValue(offsetMs);
-  /** Last minute bucket we already pushed to the store (UI-thread gate) */
   const lastPushedMinute = useSharedValue(Math.round(offsetMs / MINUTE_MS));
+  const lastCommitAt = useSharedValue(0);
   const lastHapticHour = useRef(0);
+  const pendingMinute = useSharedValue(Math.round(offsetMs / MINUTE_MS));
 
-  // Keep shared thumb in sync when store changes externally (reset, etc.)
   useEffect(() => {
+    if (isScrubbing) return;
     liveOffset.value = offsetMs;
     lastPushedMinute.value = Math.round(offsetMs / MINUTE_MS);
-  }, [offsetMs, liveOffset, lastPushedMinute]);
+    pendingMinute.value = Math.round(offsetMs / MINUTE_MS);
+  }, [offsetMs, isScrubbing, liveOffset, lastPushedMinute, pendingMinute]);
 
   const isNow = Math.abs(offsetMs) < 500;
 
@@ -105,6 +110,8 @@ export function TimeTravelBar({ dark }: Props): JSX.Element {
       "worklet";
       startOffset.value = liveOffset.value;
       lastPushedMinute.value = Math.round(liveOffset.value / MINUTE_MS);
+      pendingMinute.value = lastPushedMinute.value;
+      lastCommitAt.value = 0;
       runOnJS(onBegin)();
     })
     .onUpdate((e) => {
@@ -118,19 +125,22 @@ export function TimeTravelBar({ dark }: Props): JSX.Element {
       );
       liveOffset.value = next;
 
-      // Only leave the UI thread when the minute actually changes
       const minute = Math.round(next / MINUTE_MS);
-      if (minute !== lastPushedMinute.value) {
-        lastPushedMinute.value = minute;
-        runOnJS(commitScrub)(minute * MINUTE_MS);
-      }
+      pendingMinute.value = minute;
+      if (minute === lastPushedMinute.value) return;
+
+      const now = performance.now();
+      if (now - lastCommitAt.value < SCRUB_COMMIT_MIN_MS) return;
+
+      lastCommitAt.value = now;
+      lastPushedMinute.value = minute;
+      runOnJS(commitScrub)(minute * MINUTE_MS);
     })
     .onEnd(() => {
       "worklet";
-      const snapped =
-        Math.round(liveOffset.value / MINUTE_MS) * MINUTE_MS;
+      const snapped = pendingMinute.value * MINUTE_MS;
       liveOffset.value = snapped;
-      lastPushedMinute.value = Math.round(snapped / MINUTE_MS);
+      lastPushedMinute.value = pendingMinute.value;
       runOnJS(onEnd)(snapped);
     });
 
@@ -142,6 +152,7 @@ export function TimeTravelBar({ dark }: Props): JSX.Element {
     const snapped = Math.round(next / MINUTE_MS) * MINUTE_MS;
     liveOffset.value = snapped;
     lastPushedMinute.value = Math.round(snapped / MINUTE_MS);
+    pendingMinute.value = lastPushedMinute.value;
     runOnJS(onBegin)();
     runOnJS(commitScrub)(snapped);
     runOnJS(onEnd)(snapped);
@@ -149,94 +160,143 @@ export function TimeTravelBar({ dark }: Props): JSX.Element {
 
   const gesture = Gesture.Race(pan, tap);
 
-  // Thumb + fill driven by shared value → no React re-render on every pixel
   const thumbStyle = useAnimatedStyle(() => {
     const progress =
       (liveOffset.value + TIME_TRAVEL_RANGE_MS) / (TIME_TRAVEL_RANGE_MS * 2);
+    const p = Math.max(0, Math.min(1, progress));
     return {
-      left: `${Math.max(0, Math.min(1, progress)) * 100}%`,
+      transform: [{ translateX: p * trackWidth.value }],
     };
   });
 
   const fillStyle = useAnimatedStyle(() => {
     const progress =
       (liveOffset.value + TIME_TRAVEL_RANGE_MS) / (TIME_TRAVEL_RANGE_MS * 2);
+    const p = Math.max(0, Math.min(1, progress));
     return {
-      width: `${Math.max(0, Math.min(1, progress)) * 100}%`,
+      width: p * trackWidth.value,
     };
   });
 
   const muted = isDark ? "rgba(255,255,255,0.55)" : "rgba(0,0,0,0.45)";
   const text = isDark ? "#FFFFFF" : "#111111";
-  const trackBg = isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.08)";
-  const cardBg = isDark ? "rgba(28,28,30,0.72)" : "rgba(255,255,255,0.88)";
+  // Thin track only — not a full card fill
+  const trackBg = isDark ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.08)";
   const fillColor = isDark
     ? "rgba(225, 29, 72, 0.4)"
     : "rgba(225, 29, 72, 0.22)";
 
   return (
-    <View style={[styles.wrap, { backgroundColor: cardBg }]}>
-      <View style={styles.headerRow}>
-        <Pressable
-          accessibilityRole="button"
-          hitSlop={8}
-          onPress={() => {
-            /* future: open extended timeline */
-          }}
-          style={styles.headerLeft}
-        >
-          <Text style={[styles.headerText, { color: text }]}>{headerLabel}</Text>
-          <Ionicons color={muted} name="chevron-forward" size={14} />
-        </Pressable>
+    <View style={[styles.card, isDark ? styles.cardDark : styles.cardLight]}>
+      {/* Single glass layer clipped to the card radius — same idea as tab bar */}
+      <BlurView
+        blurMethod={
+          Platform.OS === "android" ? "dimezisBlurViewSdk31Plus" : undefined
+        }
+        blurReductionFactor={isDark ? 2 : 4}
+        intensity={isDark ? 90 : 48}
+        style={StyleSheet.absoluteFill}
+        tint={isDark ? "dark" : "systemUltraThinMaterialLight"}
+      />
 
-        {!isNow ? (
+      <View style={styles.content}>
+        <View style={styles.headerRow}>
           <Pressable
             accessibilityRole="button"
             hitSlop={8}
             onPress={() => {
-              liveOffset.value = 0;
-              lastPushedMinute.value = 0;
-              resetToNow();
-              void Haptics.notificationAsync(
-                Haptics.NotificationFeedbackType.Success
-              );
+              /* future: open extended timeline */
             }}
-            style={styles.resetBtn}
+            style={styles.headerLeft}
           >
-            <Ionicons color={ACCENT} name="refresh" size={16} />
-            <Text style={styles.resetText}>Reset</Text>
+            <Text style={[styles.headerText, { color: text }]}>
+              {headerLabel}
+            </Text>
+            <Ionicons color={muted} name="chevron-forward" size={14} />
           </Pressable>
-        ) : (
-          <View style={styles.resetPlaceholder} />
-        )}
-      </View>
 
-      <GestureDetector gesture={gesture}>
-        <View
-          onLayout={(e) => {
-            trackWidth.value = e.nativeEvent.layout.width;
-          }}
-          style={styles.trackHit}
-        >
-          <View style={[styles.track, { backgroundColor: trackBg }]}>
-            <Animated.View
-              style={[styles.trackFill, fillStyle, { backgroundColor: fillColor }]}
-            />
-            <Animated.View style={[styles.thumb, thumbStyle]}>
-              <View style={styles.thumbKnob} />
-            </Animated.View>
-          </View>
-          <View style={styles.scaleRow}>
-            <Text style={[styles.scaleText, { color: muted }]}>−12h</Text>
-            <Text style={[styles.scaleText, { color: muted }]}>+12h</Text>
-          </View>
+          {!isNow ? (
+            <Pressable
+              accessibilityRole="button"
+              hitSlop={8}
+              onPress={() => {
+                liveOffset.value = 0;
+                lastPushedMinute.value = 0;
+                pendingMinute.value = 0;
+                resetToNow();
+                void Haptics.notificationAsync(
+                  Haptics.NotificationFeedbackType.Success
+                );
+              }}
+              style={styles.resetBtn}
+            >
+              <Ionicons color={ACCENT} name="refresh" size={16} />
+              <Text style={styles.resetText}>Reset</Text>
+            </Pressable>
+          ) : (
+            <View style={styles.resetPlaceholder} />
+          )}
         </View>
-      </GestureDetector>
+
+        <GestureDetector gesture={gesture}>
+          <View
+            onLayout={(e) => {
+              trackWidth.value = e.nativeEvent.layout.width;
+            }}
+            style={styles.trackHit}
+          >
+            <View style={[styles.track, { backgroundColor: trackBg }]}>
+              <Animated.View
+                style={[
+                  styles.trackFill,
+                  fillStyle,
+                  { backgroundColor: fillColor },
+                ]}
+              />
+              <Animated.View style={[styles.thumb, thumbStyle]}>
+                <View style={styles.thumbKnob} />
+              </Animated.View>
+            </View>
+            <View style={styles.scaleRow}>
+              <Text style={[styles.scaleText, { color: muted }]}>−12h</Text>
+              <Text style={[styles.scaleText, { color: muted }]}>+12h</Text>
+            </View>
+          </View>
+        </GestureDetector>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  card: {
+    borderCurve: "continuous",
+    borderRadius: 18,
+    borderWidth: StyleSheet.hairlineWidth,
+    elevation: 10,
+    marginHorizontal: 16,
+    // Clip BlurView to the rounded rect so nothing peeks outside as a 2nd plate
+    overflow: "hidden",
+    shadowColor: "#000000",
+    shadowOffset: { height: 8, width: 0 },
+    shadowOpacity: 0.16,
+    shadowRadius: 16,
+  },
+  cardDark: {
+    // Same translucent shell language as the floating tab bar
+    backgroundColor: "rgba(20, 20, 22, 0.42)",
+    borderColor: "rgba(255, 255, 255, 0.16)",
+  },
+  cardLight: {
+    backgroundColor: "rgba(255, 255, 255, 0.55)",
+    borderColor: "rgba(0, 0, 0, 0.05)",
+    shadowOpacity: 0.08,
+  },
+  content: {
+    paddingBottom: 10,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+  },
   headerLeft: {
     alignItems: "center",
     flexDirection: "row",
@@ -305,14 +365,8 @@ const styles = StyleSheet.create({
     height: "100%",
   },
   trackHit: {
+    // Transparent hit area only — never a second plate behind the track
+    backgroundColor: "transparent",
     paddingVertical: 4,
-  },
-  wrap: {
-    borderCurve: "continuous",
-    borderRadius: 18,
-    marginHorizontal: 16,
-    paddingBottom: 10,
-    paddingHorizontal: 16,
-    paddingTop: 12,
   },
 });

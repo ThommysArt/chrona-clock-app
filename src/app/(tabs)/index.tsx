@@ -3,7 +3,11 @@ import { ScrollView, StyleSheet, Text, useColorScheme, View } from "react-native
 
 import { CityListItem } from "@/components/clocks/city-list-item";
 import { ScreenHeader } from "@/components/ui/screen-header";
-import { TabScreenShell, useCitySearch } from "@/components/ui/tab-screen-shell";
+import {
+  TabScreenShell,
+  useCitySearch,
+  useFloatingChromeInsets,
+} from "@/components/ui/tab-screen-shell";
 import { useCitiesStore } from "@/store/cities-store";
 
 export default function ListTab(): JSX.Element {
@@ -12,16 +16,24 @@ export default function ListTab(): JSX.Element {
   const removeCity = useCitiesStore((s) => s.removeCity);
   const colorScheme = useColorScheme();
   const isDark = colorScheme === "dark";
+  const chrome = useFloatingChromeInsets();
 
   return (
     <TabScreenShell
+      floatingHeader={
+        <ScreenHeader onAdd={openSearch} title="Time Zones" />
+      }
       onSearchOpenChange={onSearchOpenChange}
       searchOpen={searchOpen}
     >
-      <ScreenHeader onAdd={openSearch} title="Time Zones" />
       <ScrollView
-        contentContainerStyle={styles.list}
+        contentContainerStyle={[
+          styles.list,
+          { paddingBottom: chrome.bottom, paddingTop: chrome.top },
+        ]}
+        // Content scrolls under the progressive header / bottom fades
         showsVerticalScrollIndicator={false}
+        style={styles.scroll}
       >
         {cities.length === 0 ? (
           <View style={styles.empty}>
@@ -76,8 +88,9 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
   list: {
-    paddingBottom: 24,
     paddingHorizontal: 16,
-    paddingTop: 8,
+  },
+  scroll: {
+    flex: 1,
   },
 });

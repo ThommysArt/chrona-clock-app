@@ -1,8 +1,15 @@
-import { Html, OrbitControls } from "@react-three/drei";
+import { OrbitControls } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import { Asset } from "expo-asset";
 import type { ComponentType, JSX } from "react";
-import { Suspense, useEffect, useRef, useState } from "react";
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ActivityIndicator,
   Image,
@@ -13,16 +20,7 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as THREE from "three";
-
-// Web uses DOM canvas; native needs the expo-gl entry (`/native`)
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const { Canvas } = (
-  Platform.OS === "web"
-    ? require("@react-three/fiber")
-    : require("@react-three/fiber/native")
-) as { Canvas: ComponentType<Record<string, unknown>> };
 
 import { ACCENT, type CityDefinition } from "@/lib/constants";
 import { fonts } from "@/lib/fonts";
@@ -33,6 +31,14 @@ import {
 } from "@/lib/time";
 import { useSettingsStore } from "@/store/settings-store";
 import { useTimeStore } from "@/store/time-store";
+
+// Web uses DOM canvas; native needs the expo-gl entry (`/native`)
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { Canvas } = (
+  Platform.OS === "web"
+    ? require("@react-three/fiber")
+    : require("@react-three/fiber/native")
+) as { Canvas: ComponentType<Record<string, unknown>> };
 
 // NASA Blue Marble / three-globe assets (bundled)
 const EARTH_DAY = require("../../../assets/earth/earth-day.jpg");
@@ -156,27 +162,99 @@ type Props = {
   cities: CityDefinition[];
 };
 
+/** Screen-space pin label projected from a lat/lon on the spinning globe */
+export type ProjectedPin = {
+  id: string;
+  x: number;
+  y: number;
+  visible: boolean;
+};
+
+const _pinLocal = new THREE.Vector3();
+const _pinWorld = new THREE.Vector3();
+const _toCamera = new THREE.Vector3();
+const _normal = new THREE.Vector3();
+
 function EarthWithPins({
   cities,
-  offsetMs,
-  use24Hour,
   maps,
+  onPinsProjected,
 }: {
   cities: CityDefinition[];
-  offsetMs: number;
-  use24Hour: boolean;
   maps: EarthMaps;
+  onPinsProjected: (pins: ProjectedPin[]) => void;
 }) {
   const groupRef = useRef<THREE.Group>(null);
+  const { camera, size } = useThree();
+  const onPinsRef = useRef(onPinsProjected);
+  onPinsRef.current = onPinsProjected;
+  const lastProjectMs = useRef(0);
+  // Cache local positions so we don't recompute lat/lon every frame
+  const localPositions = useRef<
+    { id: string; pos: THREE.Vector3 }[]
+  >([]);
+
+  useEffect(() => {
+    localPositions.current = cities.map((city) => {
+      const [x, y, z] = latLonToVector3(
+        city.latitude,
+        city.longitude,
+        1.018
+      );
+      return { id: city.id, pos: new THREE.Vector3(x, y, z) };
+    });
+  }, [cities]);
 
   useFrame((_, delta) => {
-    if (groupRef.current) {
-      groupRef.current.rotation.y += delta * 0.012;
-    }
+    const group = groupRef.current;
+    if (!group) return;
+
+    group.rotation.y += delta * 0.012;
+
+    // ~8fps label projection — enough for motion, cheap on JS
+    const now =
+      typeof performance !== "undefined" ? performance.now() : Date.now();
+    if (now - lastProjectMs.current < 120) return;
+    lastProjectMs.current = now;
+
+    group.updateWorldMatrix(true, false);
+    const matrix = group.matrixWorld;
+    const camPos = camera.position;
+
+    const projected: ProjectedPin[] = localPositions.current.map(
+      ({ id, pos }) => {
+        _pinWorld.copy(pos).applyMatrix4(matrix);
+
+        // Front-face test: surface normal ≈ position from origin
+        _normal.copy(_pinWorld).normalize();
+        _toCamera.copy(camPos).sub(_pinWorld).normalize();
+        const facing = _normal.dot(_toCamera) > 0.08;
+
+        _pinLocal.copy(_pinWorld).project(camera);
+        const sx = (_pinLocal.x * 0.5 + 0.5) * size.width;
+        const sy = (-_pinLocal.y * 0.5 + 0.5) * size.height;
+        const inFrustum =
+          _pinLocal.z > -1 &&
+          _pinLocal.z < 1 &&
+          sx > -40 &&
+          sx < size.width + 40 &&
+          sy > -40 &&
+          sy < size.height + 40;
+
+        return {
+          id,
+          x: sx,
+          y: sy,
+          visible: facing && inFrustum,
+        };
+      }
+    );
+
+    onPinsRef.current(projected);
   });
 
+  // Align equirectangular texture so (0,0) sits at the expected meridian
   const textureYaw = Math.PI;
-  const useHtmlLabels = Platform.OS === "web";
 
   return (
     <group ref={groupRef} rotation={[0, textureYaw, 0]}>
@@ -220,54 +298,25 @@ function EarthWithPins({
         const [x, y, z] = latLonToVector3(
           city.latitude,
           city.longitude,
-          1.014
+          1.018
         );
-        const parts = getZonedParts(city.timezone, offsetMs, use24Hour);
         return (
           <group key={city.id} position={[x, y, z]}>
-            {/* Compact pins */}
+            {/* Pin head */}
             <mesh>
-              <sphereGeometry args={[0.0075, 12, 12]} />
+              <sphereGeometry args={[0.018, 16, 16]} />
               <meshBasicMaterial color={ACCENT} />
             </mesh>
-            {useHtmlLabels ? (
-              <Html
-                center
-                distanceFactor={5.5}
-                occlude={false}
-                position={[0, 0.05, 0]}
-                style={{ pointerEvents: "none", userSelect: "none" }}
-                zIndexRange={[100, 0]}
-              >
-                <div
-                  style={{
-                    background: "rgba(20, 20, 22, 0.88)",
-                    borderRadius: 9,
-                    boxShadow: "0 4px 12px rgba(0,0,0,0.25)",
-                    color: "#fff",
-                    fontFamily:
-                      "Manrope, system-ui, -apple-system, sans-serif",
-                    fontSize: 10,
-                    fontWeight: 600,
-                    padding: "3px 7px",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  <span style={{ color: ACCENT }}>{city.label}</span>
-                  <span
-                    style={{
-                      color: "rgba(255,255,255,0.5)",
-                      margin: "0 4px",
-                    }}
-                  >
-                    ·
-                  </span>
-                  <span style={{ fontVariantNumeric: "tabular-nums" }}>
-                    {parts.timeLabelShort}
-                  </span>
-                </div>
-              </Html>
-            ) : null}
+            {/* Soft outer halo for readability */}
+            <mesh scale={1.9}>
+              <sphereGeometry args={[0.018, 12, 12]} />
+              <meshBasicMaterial
+                color={ACCENT}
+                depthWrite={false}
+                opacity={0.28}
+                transparent
+              />
+            </mesh>
           </group>
         );
       })}
@@ -339,14 +388,15 @@ function Scene({
   cities,
   maps,
   bg,
+  onPinsProjected,
 }: {
   cities: CityDefinition[];
   maps: EarthMaps;
   bg: string;
+  onPinsProjected: (pins: ProjectedPin[]) => void;
 }) {
   const offsetMs = useTimeStore((s) => s.offsetMs);
   const nowMs = useTimeStore((s) => s.nowMs);
-  const use24Hour = useSettingsStore((s) => s.use24Hour);
   void nowMs;
 
   return (
@@ -356,8 +406,7 @@ function Scene({
       <EarthWithPins
         cities={cities}
         maps={maps}
-        offsetMs={offsetMs}
-        use24Hour={use24Hour}
+        onPinsProjected={onPinsProjected}
       />
       <OrbitControls
         dampingFactor={0.08}
@@ -375,6 +424,7 @@ function Scene({
 /**
  * Interactive 3D Earth — full-bleed under floating chrome.
  * Textures: web TextureLoader; native expo-asset (no `document`).
+ * City labels are projected into screen space so they sit on the pin points.
  */
 export function EarthGlobe({ cities }: Props): JSX.Element {
   const colorScheme = useColorScheme();
@@ -383,10 +433,31 @@ export function EarthGlobe({ cities }: Props): JSX.Element {
   const { maps, error } = useEarthMaps();
   const { width: winW, height: winH } = useWindowDimensions();
   const [layout, setLayout] = useState({ width: 0, height: 0 });
+  const [projectedPins, setProjectedPins] = useState<ProjectedPin[]>([]);
 
   const width = layout.width > 0 ? layout.width : winW;
   const height =
     layout.height > 0 ? layout.height : Math.max(360, winH);
+
+  const handlePinsProjected = useCallback((pins: ProjectedPin[]) => {
+    setProjectedPins((prev) => {
+      if (prev.length !== pins.length) return pins;
+      for (let i = 0; i < pins.length; i++) {
+        const a = prev[i]!;
+        const b = pins[i]!;
+        // Larger threshold → fewer React commits while the globe spins
+        if (
+          a.id !== b.id ||
+          a.visible !== b.visible ||
+          Math.abs(a.x - b.x) > 2.5 ||
+          Math.abs(a.y - b.y) > 2.5
+        ) {
+          return pins;
+        }
+      }
+      return prev;
+    });
+  }, []);
 
   if (!maps) {
     return (
@@ -430,69 +501,116 @@ export function EarthGlobe({ cities }: Props): JSX.Element {
         style={{ width, height }}
       >
         <Suspense fallback={null}>
-          <Scene bg={bg} cities={cities} maps={maps} />
+          <Scene
+            bg={bg}
+            cities={cities}
+            maps={maps}
+            onPinsProjected={handlePinsProjected}
+          />
         </Suspense>
       </Canvas>
 
-      {/* Native: HTML labels aren't available — compact city chips overlay */}
-      {Platform.OS !== "web" ? (
-        <NativeCityChips cities={cities} isDark={isDark} />
-      ) : null}
+      <CityPinLabels
+        cities={cities}
+        isDark={isDark}
+        pins={projectedPins}
+      />
     </View>
   );
 }
 
-function NativeCityChips({
+/** Fixed box around each pin so the chip can center without width:0 crush */
+const PIN_LABEL_BOX = 168;
+
+function CityPinLabels({
   cities,
   isDark,
+  pins,
 }: {
   cities: CityDefinition[];
   isDark: boolean;
+  pins: ProjectedPin[];
 }) {
-  const insets = useSafeAreaInsets();
   const offsetMs = useTimeStore((s) => s.offsetMs);
   const nowMs = useTimeStore((s) => s.nowMs);
   const use24Hour = useSettingsStore((s) => s.use24Hour);
   void nowMs;
 
-  // Sit just under the floating header / top fade
-  const top = insets.top + 56;
+  // Times only recompute when the clock offset changes — not on every pin move
+  const times = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const c of cities) {
+      map.set(c.id, getZonedParts(c.timezone, offsetMs, use24Hour).timeLabelShort);
+    }
+    return map;
+  }, [cities, offsetMs, use24Hour]);
+
+  const byId = useMemo(() => new Map(pins.map((p) => [p.id, p])), [pins]);
 
   return (
-    <View pointerEvents="none" style={[styles.chips, { top }]}>
+    <View pointerEvents="none" style={styles.labelsLayer}>
       {cities.map((c) => {
-        const p = getZonedParts(c.timezone, offsetMs, use24Hour);
+        const pin = byId.get(c.id);
+        if (!pin?.visible) return null;
+        const timeLabel = times.get(c.id) ?? "";
         return (
           <View
             key={c.id}
             style={[
-              styles.chip,
+              styles.pinAnchor,
               {
-                backgroundColor: isDark
-                  ? "rgba(28,28,30,0.88)"
-                  : "rgba(255,255,255,0.9)",
+                left: pin.x - PIN_LABEL_BOX / 2,
+                top: pin.y - 30,
+                width: PIN_LABEL_BOX,
               },
             ]}
           >
-            <Text
-              style={{
-                color: ACCENT,
-                fontFamily: fonts.semiBold,
-                fontSize: 11,
-              }}
+            <View
+              style={[
+                styles.chip,
+                {
+                  backgroundColor: isDark
+                    ? "rgba(20,20,22,0.9)"
+                    : "rgba(255,255,255,0.94)",
+                },
+              ]}
             >
-              {c.label}
-            </Text>
-            <Text
-              style={{
-                color: isDark ? "#fff" : "#111",
-                fontFamily: fonts.medium,
-                fontSize: 11,
-                marginLeft: 6,
-              }}
-            >
-              {p.timeLabelShort}
-            </Text>
+              <Text
+                numberOfLines={1}
+                style={{
+                  color: ACCENT,
+                  flexShrink: 0,
+                  fontFamily: fonts.semiBold,
+                  fontSize: 11,
+                }}
+              >
+                {c.label}
+              </Text>
+              <Text
+                style={{
+                  color: isDark
+                    ? "rgba(255,255,255,0.55)"
+                    : "rgba(0,0,0,0.35)",
+                  fontFamily: fonts.medium,
+                  fontSize: 11,
+                  marginHorizontal: 4,
+                }}
+              >
+                ·
+              </Text>
+              <Text
+                numberOfLines={1}
+                style={{
+                  color: isDark ? "#fff" : "#111",
+                  flexShrink: 0,
+                  fontFamily: fonts.medium,
+                  fontSize: 11,
+                  fontVariant: ["tabular-nums"],
+                }}
+              >
+                {timeLabel}
+              </Text>
+            </View>
           </View>
         );
       })}
@@ -502,23 +620,32 @@ function NativeCityChips({
 
 const styles = StyleSheet.create({
   chip: {
-    borderRadius: 10,
+    alignItems: "center",
+    alignSelf: "center",
+    borderRadius: 9,
+    elevation: 3,
     flexDirection: "row",
+    flexWrap: "nowrap",
+    maxWidth: PIN_LABEL_BOX,
     paddingHorizontal: 8,
     paddingVertical: 4,
+    shadowColor: "#000",
+    shadowOffset: { height: 2, width: 0 },
+    shadowOpacity: 0.22,
+    shadowRadius: 6,
   },
-  chips: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 6,
-    justifyContent: "center",
-    left: 12,
-    position: "absolute",
-    right: 12,
+  labelsLayer: {
+    ...StyleSheet.absoluteFill,
+    overflow: "visible",
   },
   loading: {
     alignItems: "center",
     justifyContent: "center",
+  },
+  pinAnchor: {
+    alignItems: "center",
+    justifyContent: "flex-start",
+    position: "absolute",
   },
   wrap: {
     ...StyleSheet.absoluteFill,

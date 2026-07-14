@@ -52,12 +52,13 @@ export const useTimeStore = create<TimeState>((set, get) => ({
   scrubOffsetMs: (ms) => {
     const offsetMs = snapMinute(clampOffset(ms));
     const prev = get().offsetMs;
-    // Skip identical minute — paired with UI-thread minute gate on the slider
+    // Skip identical minute — paired with UI-thread throttle on the slider
     if (offsetMs === prev) return;
+    // Keep store writes minimal while dragging; consumers re-render from this
     set({
       offsetMs,
-      // Cheap wall-clock math while scrubbing (no Temporal)
       nowMs: Date.now() + offsetMs,
+      isScrubbing: true,
     });
   },
 
@@ -90,7 +91,8 @@ export const useTimeStore = create<TimeState>((set, get) => ({
     // Don't fight the scrubber
     if (get().isScrubbing) return;
     const { offsetMs } = get();
-    set({ nowMs: appInstant(offsetMs).epochMilliseconds });
+    // Cheap — avoid Temporal on the 1Hz live tick
+    set({ nowMs: Date.now() + offsetMs });
   },
 }));
 

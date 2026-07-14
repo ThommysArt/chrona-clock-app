@@ -11,7 +11,6 @@ import { PAGE_BG } from "@/lib/constants";
 type Props = {
   children: ReactNode;
   dark?: boolean;
-  contentBottomPad?: number;
   searchOpen: boolean;
   onSearchOpenChange: (open: boolean) => void;
   /**
@@ -19,15 +18,17 @@ type Props = {
    * paints edge-to-edge under floating chrome.
    */
   immersive?: boolean;
-  /** Optional floating header slot (sits under top progressive fade) */
+  /** Floating header slot under the top progressive fade */
   floatingHeader?: ReactNode;
 };
 
-/** Shared chrome: page bg + time travel floating above tab bar + city sheet */
+/**
+ * Shared chrome: content paints full-bleed; header / time-travel / tab bar
+ * float above with progressive top + bottom fades (same idea as the globe).
+ */
 export function TabScreenShell({
   children,
   dark,
-  contentBottomPad = 200,
   searchOpen,
   onSearchOpenChange,
   immersive = false,
@@ -37,7 +38,9 @@ export function TabScreenShell({
   const isDark = dark ?? colorScheme === "dark";
   const insets = useSafeAreaInsets();
   const bg = isDark ? PAGE_BG.dark : PAGE_BG.light;
-  const topFade = Math.max(insets.top + 96, 128);
+  const topFade = Math.max(insets.top + 100, 132);
+  // Tall enough to soften content under time-travel + tab bar
+  const bottomFade = Math.max(insets.bottom + 200, 220);
 
   return (
     <View
@@ -46,18 +49,14 @@ export function TabScreenShell({
         { backgroundColor: immersive ? "transparent" : bg },
       ]}
     >
+      {/* Content fills the screen so list/clock can scroll under chrome */}
       <View
-        style={[
-          styles.content,
-          immersive
-            ? styles.contentImmersive
-            : { paddingBottom: contentBottomPad },
-        ]}
+        style={[styles.content, immersive && styles.contentImmersive]}
       >
         {children}
       </View>
 
-      {immersive && floatingHeader ? (
+      {floatingHeader ? (
         <ProgressiveBlurEdge
           backgroundColor={bg}
           edge="top"
@@ -67,17 +66,26 @@ export function TabScreenShell({
         </ProgressiveBlurEdge>
       ) : null}
 
-      <View
-        style={[
-          styles.timeTravelDock,
-          {
-            bottom: Math.max(insets.bottom, 10) + 8 + 66 + 12,
-          },
-        ]}
-        pointerEvents="box-none"
+      {/* Bottom fade behind time-travel (tab bar has its own edge fade too) */}
+      <ProgressiveBlurEdge
+        backgroundColor={bg}
+        edge="bottom"
+        fadeHeight={bottomFade}
+        style={styles.bottomFade}
       >
-        <TimeTravelBar dark={isDark} />
-      </View>
+        <View
+          pointerEvents="box-none"
+          style={[
+            styles.timeTravelDock,
+            {
+              // Clear the floating tab pill + home indicator
+              paddingBottom: Math.max(insets.bottom, 10) + 8 + 66 + 10,
+            },
+          ]}
+        >
+          <TimeTravelBar dark={isDark} />
+        </View>
+      </ProgressiveBlurEdge>
 
       <CitySearchSheet
         onClose={() => onSearchOpenChange(false)}
@@ -98,20 +106,30 @@ export function useCitySearch() {
   };
 }
 
+/** Scroll/content padding so first/last items clear floating chrome at rest */
+export function useFloatingChromeInsets() {
+  const insets = useSafeAreaInsets();
+  return {
+    top: Math.max(insets.top + 56, 88) + 8,
+    bottom: Math.max(insets.bottom, 10) + 8 + 66 + 12 + 88,
+  };
+}
+
 const styles = StyleSheet.create({
+  bottomFade: {
+    // Sit under the tab bar edge (zIndex 20) so tab pill stays on top
+    zIndex: 15,
+  },
   content: {
-    flex: 1,
+    ...StyleSheet.absoluteFill,
   },
   contentImmersive: {
-    ...StyleSheet.absoluteFill,
+    // Already absolute fill — keep explicit for clarity
   },
   root: {
     flex: 1,
   },
   timeTravelDock: {
-    left: 0,
-    position: "absolute",
-    right: 0,
-    zIndex: 15,
+    width: "100%",
   },
 });
