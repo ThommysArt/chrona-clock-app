@@ -6,3 +6,56 @@
 /* End-user path: heroui-native lives in the project's node_modules, one
    level up from this src/global.css file. */
 @source '../node_modules/heroui-native/lib';
+
+@theme {
+  --font-sans: "Manrope_400Regular";
+  --font-medium: "Manrope_500Medium";
+  --font-semibold: "Manrope_600SemiBold";
+  --font-bold: "Manrope_700Bold";
+
+  --color-accent: #e11d48;
+  --color-accent-foreground: #ffffff;
+  --color-accent-soft: #ffe4e9;
+  --color-surface-page: #f2f2f7;
+  --color-ink: #000000;
+}
+
+/* Map weight utilities to Manrope static faces (required on RN) */
+@utility font-normal {
+  font-family: "Manrope_400Regular";
+}
+@utility font-medium {
+  font-family: "Manrope_500Medium";
+}
+@utility font-semibold {
+  font-family: "Manrope_600SemiBold";
+}
+@utility font-bold {
+  font-family: "Manrope_700Bold";
+}
+@utility font-extrabold {
+  font-family: "Manrope_800ExtraBold";
+}
+@utility font-black {
+  font-family: "Manrope_800ExtraBold";
+}
+
+@layer theme {
+  :root {
+    @variant light {
+      --color-accent: #e11d48;
+      --color-accent-foreground: #ffffff;
+      --color-accent-soft: #ffe4e9;
+      --color-surface-page: #f2f2f7;
+      --color-ink: #000000;
+    }
+
+    @variant dark {
+      --color-accent: #fb7185;
+      --color-accent-foreground: #1a050a;
+      --color-accent-soft: #3d1520;
+      --color-surface-page: #0c0c0e;
+      --color-ink: #fafafa;
+    }
+  }
+}

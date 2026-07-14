@@ -1,46 +1,52 @@
-# Welcome to your HeroUI Native app 👋
+# Chrona
 
-This is an [Expo](https://expo.dev) project preconfigured with
-[HeroUI Native](https://heroui.com/docs/native), [Uniwind](https://docs.uniwind.dev)
-(Tailwind CSS for React Native), and [Expo Router](https://docs.expo.dev/router/introduction)
-with a bottom-tab layout.
+A beautifully designed offline-first world clock app built with Expo.
+
+Three synchronized views share a single timestamp:
+
+1. **List** — saved cities with local times, offsets, and day/night indicators  
+2. **Globe** — orthographic Earth with city pins and day/night terminator  
+3. **Clock** — multi-hand analog dial for every saved city  
+
+**Time Travel** (±12h) lives above the iOS-26 style floating tab bar and updates every screen at once.
+
+## Stack
+
+- Expo Router + React Native
+- HeroUI Native + Uniwind (Tailwind)
+- Zustand + MMKV (web falls back to `localStorage`)
+- `@js-temporal/polyfill` + `@vvo/tzdb`
+- Reanimated + Gesture Handler
+- expo-haptics / expo-blur / expo-linear-gradient
 
 ## Get started
 
-1. Install dependencies
+```bash
+pnpm install
+pnpm start
+```
 
-   ```bash
-   npm install
-   ```
+Then open iOS Simulator, Android emulator, Expo Go, or press `w` for web.
 
-2. Start the app
+## Project layout
 
-   ```bash
-   npx expo start
-   ```
+```
+src/
+  app/(tabs)/     # List · Globe · Clock
+  components/     # Tab bar, Time Travel, clock, globe, city search
+  store/          # time · cities · settings
+  lib/            # time engine, storage, city catalog
+```
 
-In the output, you'll find options to open the app in a
+## Scripts
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+| Command | Description |
+|--------|-------------|
+| `pnpm start` | Expo dev server |
+| `pnpm typecheck` | TypeScript |
+| `pnpm lint` | ESLint |
+| `pnpm format` | Prettier |
 
-You can start developing by editing the files inside the **src/app** directory. The tabs themselves live under `src/app/(tabs)/`. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+## Product spec
 
-## What's preconfigured
-
-- **HeroUI Native** (`heroui-native`) wrapped in `HeroUINativeProvider` and `GestureHandlerRootView` in `src/app/_layout.tsx`
-- **Uniwind** + **Tailwind CSS** wired through `metro.config.js` and `src/global.css`
-- All HeroUI Native mandatory peer dependencies: `react-native-reanimated`, `react-native-gesture-handler`, `react-native-worklets`, `react-native-safe-area-context`, `react-native-svg`, `react-native-screens`
-- `@gorhom/bottom-sheet` for bottom-sheet UIs
-- `@expo/vector-icons` (Ionicons) for tab bar icons
-- TypeScript with `strict: true` and `@/*` path alias to `./src/*`
-- React Compiler enabled
-
-## Learn more
-
-- [HeroUI Native components](https://heroui.com/docs/native) — full component reference
-- [Expo documentation](https://docs.expo.dev/) — Expo fundamentals and guides
-- [Uniwind documentation](https://docs.uniwind.dev) — Tailwind for React Native
-- [Expo Router](https://docs.expo.dev/router/introduction) — file-based routing
+See [docs/Chrona_Product_Spec.md](docs/Chrona_Product_Spec.md).

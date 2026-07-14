@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "chrona-clock-app",
+    "name": "Chrona",
     "slug": "chrona-clock-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "heroui-native-app",
+    "scheme": "chrona",
     "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true
@@ -13,7 +13,7 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#0c0c0e"
       },
       "predictiveBackGestureEnabled": false
     },
@@ -25,10 +25,11 @@
         {
           "image": "./assets/images/splash-icon.png",
           "resizeMode": "contain",
-          "backgroundColor": "#ffffff"
+          "backgroundColor": "#0c0c0e"
         }
       ],
-      "expo-status-bar"
+      "expo-status-bar",
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true,
