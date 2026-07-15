@@ -51,8 +51,7 @@ function CityListItemComponent({
 
   const textPrimary = isDark ? "#FFFFFF" : "#111111";
   const textSecondary = isDark ? "rgba(255,255,255,0.5)" : "rgba(0,0,0,0.45)";
-  // Snap while dragging so digit withTiming storms don't steal JS from the slider
-  const animateDigits = !isScrubbing;
+
 
   return (
     <View style={styles.rowWrap}>
@@ -118,7 +117,6 @@ function CityListItemComponent({
 
           <View style={styles.right}>
             <RollingDigits
-              animate={animateDigits}
               textStyle={styles.time}
               value={parts.timeLabelShort}
             />
@@ -158,7 +156,6 @@ function CityListItemComponent({
                   ]}
                 >
                   <RollingDigits
-                    animate={animateDigits}
                     digitWidth={18}
                     height={28}
                     textStyle={[styles.digit, { color: textPrimary }]}

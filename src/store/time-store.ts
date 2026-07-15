@@ -1,4 +1,3 @@
-import { startTransition } from "react";
 import { create } from "zustand";
 
 import { TIME_TRAVEL_RANGE_MS, TICK_MS } from "@/lib/constants";
@@ -12,16 +11,25 @@ type TimeState = {
   nowMs: number;
   /** True while the user is dragging Time Travel (UI can stay light) */
   isScrubbing: boolean;
+  /**
+   * Bumped on every begin/end scrub so in-flight UI work can ignore stale
+   * commits from a previous gesture.
+   */
+  scrubEpoch: number;
+  /** Monotonic id for the active scrub gesture — stale JS work must not apply */
+  scrubSession: number;
   ready: boolean;
   setOffsetMs: (ms: number) => void;
   resetToNow: () => void;
   /**
    * Live scrub update. Snaps to 1-minute steps and skips no-ops so
    * Temporal/list recompute doesn't thrash every pan pixel.
+   * Synchronous — the slider is the authority; deferred writes caused
+   * older gestures to overwrite newer ones.
    */
-  scrubOffsetMs: (ms: number) => void;
-  beginScrub: () => void;
-  endScrub: (finalMs?: number) => void;
+  scrubOffsetMs: (ms: number, session: number) => void;
+  beginScrub: (session: number) => void;
+  endScrub: (finalMs: number | undefined, session: number) => void;
   tick: () => void;
 };
 
@@ -45,6 +53,8 @@ export const useTimeStore = create<TimeState>((set, get) => ({
   offsetMs: 0,
   nowMs: Date.now(),
   isScrubbing: false,
+  scrubEpoch: 0,
+  scrubSession: 0,
   ready: false,
 
   setOffsetMs: (ms) => {
@@ -56,48 +66,50 @@ export const useTimeStore = create<TimeState>((set, get) => ({
     });
   },
 
-  scrubOffsetMs: (ms) => {
+  scrubOffsetMs: (ms, session) => {
+    const state = get();
+    if (session !== state.scrubSession) return;
+    if (!state.isScrubbing) return;
     const offsetMs = snapMinute(clampOffset(ms));
-    const prev = get().offsetMs;
-    // Skip identical minute — paired with UI-thread throttle on the slider
-    if (offsetMs === prev) return;
-    // Transition priority so gesture JS / slider chrome stay ahead of list work.
-    // Drop the write if scrub already ended (stale deferred commit).
-    startTransition(() => {
-      set((state) => {
-        if (!state.isScrubbing) return state;
-        if (state.offsetMs === offsetMs) return state;
-        return {
-          offsetMs,
-          nowMs: Date.now() + offsetMs,
-        };
-      });
+    if (offsetMs === state.offsetMs) return;
+    set({
+      offsetMs,
+      nowMs: Date.now() + offsetMs,
     });
   },
 
-  beginScrub: () => set({ isScrubbing: true }),
+  beginScrub: (session) =>
+    set((state) => ({
+      isScrubbing: true,
+      scrubSession: session,
+      scrubEpoch: state.scrubEpoch + 1,
+    })),
 
-  endScrub: (finalMs) => {
+  endScrub: (finalMs, session) => {
+    const state = get();
+    if (session !== state.scrubSession) return;
     const offsetMs =
       finalMs === undefined
-        ? get().offsetMs
+        ? state.offsetMs
         : snapMinute(clampOffset(finalMs));
     writeOffsetMs(offsetMs);
-    set({
+    set((s) => ({
       isScrubbing: false,
+      scrubEpoch: s.scrubEpoch + 1,
       offsetMs,
       // Precise Temporal instant once at the end
       nowMs: appInstant(offsetMs).epochMilliseconds,
-    });
+    }));
   },
 
   resetToNow: () => {
     writeOffsetMs(0);
-    set({
+    set((state) => ({
       offsetMs: 0,
       isScrubbing: false,
+      scrubEpoch: state.scrubEpoch + 1,
       nowMs: appInstant(0).epochMilliseconds,
-    });
+    }));
   },
 
   tick: () => {

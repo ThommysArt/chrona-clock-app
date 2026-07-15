@@ -89,6 +89,7 @@ function RollingDigit({
               {
                 fontVariant: ["tabular-nums"],
                 height,
+                includeFontPadding: false,
                 lineHeight: height,
                 textAlign: "center",
                 width,
@@ -147,6 +148,7 @@ export function RollingDigits({
             />
           );
         }
+        const narrow = ch === ":" || ch === ".";
         return (
           <Text
             key={`s-${i}`}
@@ -154,9 +156,10 @@ export function RollingDigits({
               flatStyle,
               {
                 height,
+                includeFontPadding: false,
                 lineHeight: height,
-                textAlign: "center",
-                width: colonWidth,
+                textAlign: narrow ? "center" : "left",
+                ...(narrow ? { width: colonWidth } : {}),
               },
             ]}
           >

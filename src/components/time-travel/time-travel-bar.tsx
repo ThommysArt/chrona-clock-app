@@ -18,10 +18,12 @@ import {
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
   runOnJS,
+  runOnUI,
   useAnimatedStyle,
   useSharedValue,
 } from "react-native-reanimated";
 
+import { RollingDigits } from "@/components/ui/rolling-digits";
 import { ACCENT, TIME_TRAVEL_RANGE_MS } from "@/lib/constants";
 import { fonts } from "@/lib/fonts";
 import {
@@ -43,7 +45,8 @@ const SCRUB_COMMIT_MIN_MS = 150;
 
 /**
  * Floating Time Travel card — solid fill (same language as the tab bar shell).
- * Thumb/fill live entirely on the UI thread; store commits are deferred.
+ * Thumb/fill live entirely on the UI thread; the store follows the slider,
+ * never the other way around while a gesture is active.
  */
 export function TimeTravelBar({ dark }: Props): JSX.Element {
   const colorScheme = useColorScheme();
@@ -65,17 +68,33 @@ export function TimeTravelBar({ dark }: Props): JSX.Element {
   const lastCommitAt = useSharedValue(0);
   const lastHapticHour = useRef(0);
   const pendingMinute = useSharedValue(Math.round(offsetMs / MINUTE_MS));
+  /** Session id that owns the thumb (0 = store may drive position) */
+  const thumbOwnerSession = useSharedValue(0);
+  /** Monotonic session counter stamped onto every JS commit */
+  const gestureSession = useSharedValue(0);
+  /** Session captured at pan onBegin — read in onEnd before the next pan can overwrite */
+  const panOwnSession = useSharedValue(0);
+  const sessionRef = useRef(0);
 
-  // Header follows scrub immediately without waiting on list consumers
+  // Header follows the controller immediately
   const [labelOffset, setLabelOffset] = useState(offsetMs);
 
+  // Only pull thumb/label from the store when the slider is idle.
+  // Never overwrite liveOffset mid-gesture (caused A→B→A→B snap-back).
   useEffect(() => {
-    if (isScrubbing) return;
+    if (thumbOwnerSession.value !== 0 || isScrubbing) return;
     liveOffset.value = offsetMs;
     lastPushedMinute.value = Math.round(offsetMs / MINUTE_MS);
     pendingMinute.value = Math.round(offsetMs / MINUTE_MS);
     setLabelOffset(offsetMs);
-  }, [offsetMs, isScrubbing, liveOffset, lastPushedMinute, pendingMinute]);
+  }, [
+    offsetMs,
+    isScrubbing,
+    thumbOwnerSession,
+    liveOffset,
+    lastPushedMinute,
+    pendingMinute,
+  ]);
 
   const isNow = Math.abs(labelOffset) < 500;
 
@@ -84,15 +103,23 @@ export function TimeTravelBar({ dark }: Props): JSX.Element {
     [labelOffset, use24Hour]
   );
 
-  const headerLabel = isNow
-    ? "Time Travel"
-    : `${deviceParts.timeLabelShort} (${formatOffsetHours(labelOffset)})`;
+  const headerTimeStyle = useMemo(
+    () => ({
+      color: isDark ? "#FFFFFF" : "#111111",
+      fontFamily: fonts.semiBold,
+      fontSize: 15,
+      fontWeight: "600" as const,
+    }),
+    [isDark]
+  );
+
+  const offsetLabel = formatOffsetHours(labelOffset);
 
   const commitScrub = useCallback(
-    (ms: number) => {
+    (ms: number, session: number) => {
+      if (session !== sessionRef.current) return;
       setLabelOffset(ms);
-      // Store applies startTransition — list/globe follow without blocking the thumb
-      scrubOffsetMs(ms);
+      scrubOffsetMs(ms, session);
       const hourBucket = Math.round(ms / (60 * 60 * 1000));
       if (hourBucket !== lastHapticHour.current) {
         lastHapticHour.current = hourBucket;
@@ -102,17 +129,35 @@ export function TimeTravelBar({ dark }: Props): JSX.Element {
     [scrubOffsetMs]
   );
 
-  const onBegin = useCallback(() => {
-    beginScrub();
-  }, [beginScrub]);
+  const onBegin = useCallback(
+    (session: number) => {
+      sessionRef.current = session;
+      beginScrub(session);
+    },
+    [beginScrub]
+  );
+
+  const releaseThumb = useCallback((session: number) => {
+    runOnUI(() => {
+      "worklet";
+      if (thumbOwnerSession.value === session) {
+        thumbOwnerSession.value = 0;
+      }
+    })();
+  }, [thumbOwnerSession]);
 
   const onEnd = useCallback(
-    (ms: number) => {
+    (ms: number, session: number) => {
+      // Ignore ends from an older gesture that finished late
+      if (session !== sessionRef.current) return;
       setLabelOffset(ms);
-      endScrub(ms);
+      endScrub(ms, session);
+      // Invalidate any still-queued commits from this gesture
+      sessionRef.current = session + 1;
+      releaseThumb(session);
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     },
-    [endScrub]
+    [endScrub, releaseThumb]
   );
 
   // Keep callbacks fresh for a stable Gesture instance
@@ -123,25 +168,29 @@ export function TimeTravelBar({ dark }: Props): JSX.Element {
   beginRef.current = onBegin;
   endRef.current = onEnd;
 
-  const dispatchCommit = useCallback((ms: number) => {
-    commitRef.current(ms);
+  const dispatchCommit = useCallback((ms: number, session: number) => {
+    commitRef.current(ms, session);
   }, []);
-  const dispatchBegin = useCallback(() => {
-    beginRef.current();
+  const dispatchBegin = useCallback((session: number) => {
+    beginRef.current(session);
   }, []);
-  const dispatchEnd = useCallback((ms: number) => {
-    endRef.current(ms);
+  const dispatchEnd = useCallback((ms: number, session: number) => {
+    endRef.current(ms, session);
   }, []);
 
   const gesture = useMemo(() => {
     const pan = Gesture.Pan()
       .onBegin(() => {
         "worklet";
+        const session = gestureSession.value + 1;
+        gestureSession.value = session;
+        panOwnSession.value = session;
+        thumbOwnerSession.value = session;
         startOffset.value = liveOffset.value;
         lastPushedMinute.value = Math.round(liveOffset.value / MINUTE_MS);
         pendingMinute.value = lastPushedMinute.value;
         lastCommitAt.value = 0;
-        runOnJS(dispatchBegin)();
+        runOnJS(dispatchBegin)(session);
       })
       .onUpdate((e) => {
         "worklet";
@@ -163,18 +212,33 @@ export function TimeTravelBar({ dark }: Props): JSX.Element {
 
         lastCommitAt.value = now;
         lastPushedMinute.value = minute;
-        runOnJS(dispatchCommit)(minute * MINUTE_MS);
+        runOnJS(dispatchCommit)(minute * MINUTE_MS, panOwnSession.value);
       })
       .onEnd(() => {
         "worklet";
+        const session = panOwnSession.value;
         const snapped = pendingMinute.value * MINUTE_MS;
         liveOffset.value = snapped;
         lastPushedMinute.value = pendingMinute.value;
-        runOnJS(dispatchEnd)(snapped);
+        runOnJS(dispatchCommit)(snapped, session);
+        runOnJS(dispatchEnd)(snapped, session);
+      })
+      .onFinalize((_e, success) => {
+        "worklet";
+        if (success) return;
+        const session = panOwnSession.value;
+        if (thumbOwnerSession.value !== session) return;
+        const snapped = pendingMinute.value * MINUTE_MS;
+        runOnJS(dispatchCommit)(snapped, session);
+        runOnJS(dispatchEnd)(snapped, session);
       });
 
     const tap = Gesture.Tap().onEnd((e) => {
       "worklet";
+      const session = gestureSession.value + 1;
+      gestureSession.value = session;
+      panOwnSession.value = session;
+      thumbOwnerSession.value = session;
       const width = trackWidth.value || 1;
       const ratio = Math.max(0, Math.min(1, e.x / width));
       const next = ratio * TIME_TRAVEL_RANGE_MS * 2 - TIME_TRAVEL_RANGE_MS;
@@ -182,9 +246,9 @@ export function TimeTravelBar({ dark }: Props): JSX.Element {
       liveOffset.value = snapped;
       lastPushedMinute.value = Math.round(snapped / MINUTE_MS);
       pendingMinute.value = lastPushedMinute.value;
-      runOnJS(dispatchBegin)();
-      runOnJS(dispatchCommit)(snapped);
-      runOnJS(dispatchEnd)(snapped);
+      runOnJS(dispatchBegin)(session);
+      runOnJS(dispatchCommit)(snapped, session);
+      runOnJS(dispatchEnd)(snapped, session);
     });
 
     return Gesture.Race(pan, tap);
@@ -192,6 +256,9 @@ export function TimeTravelBar({ dark }: Props): JSX.Element {
     dispatchBegin,
     dispatchCommit,
     dispatchEnd,
+    panOwnSession,
+    thumbOwnerSession,
+    gestureSession,
     lastCommitAt,
     lastPushedMinute,
     liveOffset,
@@ -237,9 +304,22 @@ export function TimeTravelBar({ dark }: Props): JSX.Element {
             }}
             style={styles.headerLeft}
           >
-            <Text style={[styles.headerText, { color: text }]}>
-              {headerLabel}
-            </Text>
+            {isNow ? (
+              <Text style={[styles.headerText, { color: text }]}>Time Travel</Text>
+            ) : (
+              <View style={styles.headerTimeRow}>
+                <RollingDigits
+                  animate
+                  digitWidth={10}
+                  height={18}
+                  textStyle={headerTimeStyle}
+                  value={deviceParts.timeLabelShort}
+                />
+                <Text style={[styles.headerText, styles.headerOffset, { color: text }]}>
+                  {` (${offsetLabel})`}
+                </Text>
+              </View>
+            )}
             <Ionicons color={muted} name="chevron-forward" size={14} />
           </Pressable>
 
@@ -248,6 +328,8 @@ export function TimeTravelBar({ dark }: Props): JSX.Element {
               accessibilityRole="button"
               hitSlop={8}
               onPress={() => {
+                thumbOwnerSession.value = 0;
+                sessionRef.current += 1;
                 liveOffset.value = 0;
                 lastPushedMinute.value = 0;
                 pendingMinute.value = 0;
@@ -326,8 +408,20 @@ const styles = StyleSheet.create({
   },
   headerLeft: {
     alignItems: "center",
+    flex: 1,
     flexDirection: "row",
+    flexShrink: 1,
     gap: 4,
+    marginRight: 8,
+  },
+  headerOffset: {
+    flexShrink: 1,
+  },
+  headerTimeRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    flexShrink: 1,
+    overflow: "hidden",
   },
   headerRow: {
     alignItems: "center",
