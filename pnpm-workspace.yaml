@@ -1,0 +1,10 @@
+packages:
+  - '.'
+
+# pnpm 10 reads onlyBuiltDependencies; pnpm 11 (EAS) reads allowBuilds.
+# unrs-resolver is pulled in by eslint and needs its native postinstall.
+onlyBuiltDependencies:
+  - unrs-resolver
+
+allowBuilds:
+  unrs-resolver: true

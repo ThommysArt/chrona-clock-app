@@ -1,6 +1,7 @@
 import { OrbitControls } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import { Asset } from "expo-asset";
+import * as FileSystem from "expo-file-system/legacy";
 import type { ComponentType, JSX } from "react";
 import {
   Suspense,
@@ -69,17 +70,44 @@ function solidTexture(r: number, g: number, b: number): THREE.Texture {
 }
 
 /**
+ * expo-gl's native `loadImage` only accepts `{ localUri: "file://..." }`.
+ * Android preview/release APKs often leave asset URIs schemeless (drawable ids),
+ * so we copy into the cache directory first when needed.
+ */
+async function resolveFileLocalUri(asset: Asset): Promise<string> {
+  await asset.downloadAsync();
+  const source = asset.localUri ?? asset.uri;
+  if (!source) throw new Error("Failed to resolve earth texture asset");
+
+  if (source.startsWith("file://")) {
+    return source;
+  }
+
+  const cacheRoot = FileSystem.cacheDirectory;
+  if (!cacheRoot) throw new Error("FileSystem.cacheDirectory unavailable");
+
+  const ext = asset.type || "jpg";
+  const id = asset.hash || asset.name || String(asset);
+  const dest = `${cacheRoot}chrona-earth-${id}.${ext}`;
+  const info = await FileSystem.getInfoAsync(dest);
+  if (!info.exists) {
+    await FileSystem.copyAsync({ from: source, to: dest });
+  }
+  return dest.startsWith("file://") ? dest : `file://${dest}`;
+}
+
+/**
  * THREE.TextureLoader / ImageLoader touch `document` (DOM Image) — broken on RN.
  * Web: standard TextureLoader.
- * Native: expo-asset + the same DataTexture path expo-three uses (no `document`).
+ * Native: file:// URI through DataTexture so expo-gl can decode the pixels.
  */
 async function loadTexture(moduleId: number): Promise<THREE.Texture> {
   const asset = Asset.fromModule(moduleId);
-  await asset.downloadAsync();
-  const uri = asset.localUri ?? asset.uri;
-  if (!uri) throw new Error("Failed to resolve earth texture asset");
 
   if (Platform.OS === "web") {
+    await asset.downloadAsync();
+    const uri = asset.localUri ?? asset.uri;
+    if (!uri) throw new Error("Failed to resolve earth texture asset");
     return new Promise((resolve, reject) => {
       new THREE.TextureLoader().load(
         uri,
@@ -90,13 +118,18 @@ async function loadTexture(moduleId: number): Promise<THREE.Texture> {
     });
   }
 
-  // Native path — never touch document / DOM Image
+  const localUri = await resolveFileLocalUri(asset);
+
   let width = asset.width;
   let height = asset.height;
   if (!width || !height) {
     const size = await new Promise<{ width: number; height: number }>(
       (resolve, reject) => {
-        Image.getSize(uri, (w, h) => resolve({ width: w, height: h }), reject);
+        Image.getSize(
+          localUri,
+          (w, h) => resolve({ width: w, height: h }),
+          reject
+        );
       }
     );
     width = size.width;
@@ -104,12 +137,12 @@ async function loadTexture(moduleId: number): Promise<THREE.Texture> {
   }
 
   const texture = new THREE.Texture();
-  // Forces expo-gl to pass the native asset through gl.texImage2D verbatim
-  // (same trick as expo-three's TextureLoader on native)
+  // Forces three.js through the DataTexture upload path; expo-gl then decodes
+  // via localUri (file://) instead of a DOM Image.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (texture as any).isDataTexture = true;
   texture.image = {
-    data: asset,
+    data: { localUri },
     width,
     height,
   };
@@ -117,6 +150,7 @@ async function loadTexture(moduleId: number): Promise<THREE.Texture> {
   texture.minFilter = THREE.LinearFilter;
   texture.magFilter = THREE.LinearFilter;
   texture.generateMipmaps = false;
+  texture.unpackAlignment = 1;
   return applyTextureDefaults(texture);
 }
 

@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import type { JSX } from "react";
-import { useState } from "react";
+import { memo, useState } from "react";
 import {
   Pressable,
   StyleSheet,
@@ -10,9 +10,14 @@ import {
   View,
 } from "react-native";
 
+import { RollingDigits } from "@/components/ui/rolling-digits";
 import { ACCENT, type CityDefinition } from "@/lib/constants";
 import { fonts } from "@/lib/fonts";
-import { formatRelativeOffset, getDeviceTimezone, getZonedParts } from "@/lib/time";
+import {
+  formatRelativeOffset,
+  getDeviceTimezone,
+  getZonedParts,
+} from "@/lib/time";
 import { useSettingsStore } from "@/store/settings-store";
 import { useTimeStore } from "@/store/time-store";
 
@@ -23,7 +28,7 @@ type Props = {
   isLast?: boolean;
 };
 
-export function CityListItem({
+function CityListItemComponent({
   city,
   onRemove,
   isFirst,
@@ -32,7 +37,9 @@ export function CityListItem({
   const colorScheme = useColorScheme();
   const isDark = colorScheme === "dark";
   const offsetMs = useTimeStore((s) => s.offsetMs);
-  const nowMs = useTimeStore((s) => s.nowMs);
+  const isScrubbing = useTimeStore((s) => s.isScrubbing);
+  // Live 1Hz tick only when not scrubbing — avoid extra list work on drag
+  const nowMs = useTimeStore((s) => (s.isScrubbing ? 0 : s.nowMs));
   const use24Hour = useSettingsStore((s) => s.use24Hour);
   const [expanded, setExpanded] = useState(false);
 
@@ -44,25 +51,39 @@ export function CityListItem({
 
   const textPrimary = isDark ? "#FFFFFF" : "#111111";
   const textSecondary = isDark ? "rgba(255,255,255,0.5)" : "rgba(0,0,0,0.45)";
+  // Snap while dragging so digit withTiming storms don't steal JS from the slider
+  const animateDigits = !isScrubbing;
 
   return (
     <View style={styles.rowWrap}>
-      {/* Timeline rail */}
       <View style={styles.rail}>
         {!isFirst && (
           <View
             style={[
               styles.railLineTop,
-              { backgroundColor: isDark ? "rgba(255,106,0,0.35)" : "rgba(255,106,0,0.4)" },
+              {
+                backgroundColor: isDark
+                  ? "rgba(255,106,0,0.35)"
+                  : "rgba(255,106,0,0.4)",
+              },
             ]}
           />
         )}
-        <View style={[styles.railDot, parts.isDaytime ? styles.railDotDay : styles.railDotNight]} />
+        <View
+          style={[
+            styles.railDot,
+            parts.isDaytime ? styles.railDotDay : styles.railDotNight,
+          ]}
+        />
         {!isLast && (
           <View
             style={[
               styles.railLineBottom,
-              { backgroundColor: isDark ? "rgba(255,106,0,0.35)" : "rgba(255,106,0,0.4)" },
+              {
+                backgroundColor: isDark
+                  ? "rgba(255,106,0,0.35)"
+                  : "rgba(255,106,0,0.4)",
+              },
             ]}
           />
         )}
@@ -83,16 +104,24 @@ export function CityListItem({
       >
         <View style={styles.mainRow}>
           <View style={styles.left}>
-            <Text style={[styles.cityName, { color: textPrimary }]}>{city.label}</Text>
+            <Text style={[styles.cityName, { color: textPrimary }]}>
+              {city.label}
+            </Text>
             <Text style={[styles.meta, { color: textSecondary }]}>
               {relative}
               {isDevice ? " · Device time zone" : ""}
             </Text>
-            <Text style={[styles.region, { color: textSecondary }]}>{city.region}</Text>
+            <Text style={[styles.region, { color: textSecondary }]}>
+              {city.region}
+            </Text>
           </View>
 
           <View style={styles.right}>
-            <Text style={styles.time}>{parts.timeLabelShort}</Text>
+            <RollingDigits
+              animate={animateDigits}
+              textStyle={styles.time}
+              value={parts.timeLabelShort}
+            />
             <View style={styles.abbrRow}>
               <Text style={[styles.abbr, { color: textSecondary }]}>
                 {parts.abbreviation}
@@ -128,9 +157,13 @@ export function CityListItem({
                     },
                   ]}
                 >
-                  <Text style={[styles.digit, { color: textPrimary }]}>
-                    {val.toString().padStart(2, "0")}
-                  </Text>
+                  <RollingDigits
+                    animate={animateDigits}
+                    digitWidth={18}
+                    height={28}
+                    textStyle={[styles.digit, { color: textPrimary }]}
+                    value={val.toString().padStart(2, "0")}
+                  />
                 </View>
               ))}
             </View>
@@ -154,6 +187,8 @@ export function CityListItem({
     </View>
   );
 }
+
+export const CityListItem = memo(CityListItemComponent);
 
 const styles = StyleSheet.create({
   abbr: {

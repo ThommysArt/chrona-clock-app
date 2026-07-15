@@ -32,6 +32,7 @@
       ],
       "expo-status-bar",
       "expo-asset",
+      "expo-file-system",
       "expo-sqlite"
     ],
     "experiments": {

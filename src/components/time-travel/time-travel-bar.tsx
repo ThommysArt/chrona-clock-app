@@ -1,7 +1,13 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import type { JSX } from "react";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Pressable,
   StyleSheet,
@@ -32,23 +38,25 @@ type Props = {
 };
 
 const MINUTE_MS = 60_000;
-/** Max rate we push scrub minutes into JS/Zustand — thumb never waits on this */
-const SCRUB_COMMIT_MIN_MS = 120;
+/** How often we push scrub minutes into JS — keep low so the thumb stays free */
+const SCRUB_COMMIT_MIN_MS = 150;
 
 /**
  * Floating Time Travel card — solid fill (same language as the tab bar shell).
+ * Thumb/fill live entirely on the UI thread; store commits are deferred.
  */
 export function TimeTravelBar({ dark }: Props): JSX.Element {
   const colorScheme = useColorScheme();
   const isDark = dark ?? colorScheme === "dark";
   const offsetMs = useTimeStore((s) => s.offsetMs);
   const isScrubbing = useTimeStore((s) => s.isScrubbing);
-  const scrubOffsetMs = useTimeStore((s) => s.scrubOffsetMs);
-  const beginScrub = useTimeStore((s) => s.beginScrub);
-  const endScrub = useTimeStore((s) => s.endScrub);
-  const resetToNow = useTimeStore((s) => s.resetToNow);
-  const nowMs = useTimeStore((s) => s.nowMs);
   const use24Hour = useSettingsStore((s) => s.use24Hour);
+
+  // Stable action refs — gesture stays memoized and never waits on list work
+  const scrubOffsetMs = useTimeStore.getState().scrubOffsetMs;
+  const beginScrub = useTimeStore.getState().beginScrub;
+  const endScrub = useTimeStore.getState().endScrub;
+  const resetToNow = useTimeStore.getState().resetToNow;
 
   const trackWidth = useSharedValue(1);
   const startOffset = useSharedValue(0);
@@ -58,27 +66,32 @@ export function TimeTravelBar({ dark }: Props): JSX.Element {
   const lastHapticHour = useRef(0);
   const pendingMinute = useSharedValue(Math.round(offsetMs / MINUTE_MS));
 
+  // Header follows scrub immediately without waiting on list consumers
+  const [labelOffset, setLabelOffset] = useState(offsetMs);
+
   useEffect(() => {
     if (isScrubbing) return;
     liveOffset.value = offsetMs;
     lastPushedMinute.value = Math.round(offsetMs / MINUTE_MS);
     pendingMinute.value = Math.round(offsetMs / MINUTE_MS);
+    setLabelOffset(offsetMs);
   }, [offsetMs, isScrubbing, liveOffset, lastPushedMinute, pendingMinute]);
 
-  const isNow = Math.abs(offsetMs) < 500;
+  const isNow = Math.abs(labelOffset) < 500;
 
   const deviceParts = useMemo(
-    () => getZonedParts(getDeviceTimezone(), offsetMs, use24Hour),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [offsetMs, use24Hour, nowMs]
+    () => getZonedParts(getDeviceTimezone(), labelOffset, use24Hour),
+    [labelOffset, use24Hour]
   );
 
   const headerLabel = isNow
     ? "Time Travel"
-    : `${deviceParts.timeLabelShort} (${formatOffsetHours(offsetMs)})`;
+    : `${deviceParts.timeLabelShort} (${formatOffsetHours(labelOffset)})`;
 
   const commitScrub = useCallback(
     (ms: number) => {
+      setLabelOffset(ms);
+      // Store applies startTransition — list/globe follow without blocking the thumb
       scrubOffsetMs(ms);
       const hourBucket = Math.round(ms / (60 * 60 * 1000));
       if (hourBucket !== lastHapticHour.current) {
@@ -95,66 +108,97 @@ export function TimeTravelBar({ dark }: Props): JSX.Element {
 
   const onEnd = useCallback(
     (ms: number) => {
+      setLabelOffset(ms);
       endScrub(ms);
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     },
     [endScrub]
   );
 
-  const pan = Gesture.Pan()
-    .onBegin(() => {
-      "worklet";
-      startOffset.value = liveOffset.value;
-      lastPushedMinute.value = Math.round(liveOffset.value / MINUTE_MS);
-      pendingMinute.value = lastPushedMinute.value;
-      lastCommitAt.value = 0;
-      runOnJS(onBegin)();
-    })
-    .onUpdate((e) => {
+  // Keep callbacks fresh for a stable Gesture instance
+  const commitRef = useRef(commitScrub);
+  const beginRef = useRef(onBegin);
+  const endRef = useRef(onEnd);
+  commitRef.current = commitScrub;
+  beginRef.current = onBegin;
+  endRef.current = onEnd;
+
+  const dispatchCommit = useCallback((ms: number) => {
+    commitRef.current(ms);
+  }, []);
+  const dispatchBegin = useCallback(() => {
+    beginRef.current();
+  }, []);
+  const dispatchEnd = useCallback((ms: number) => {
+    endRef.current(ms);
+  }, []);
+
+  const gesture = useMemo(() => {
+    const pan = Gesture.Pan()
+      .onBegin(() => {
+        "worklet";
+        startOffset.value = liveOffset.value;
+        lastPushedMinute.value = Math.round(liveOffset.value / MINUTE_MS);
+        pendingMinute.value = lastPushedMinute.value;
+        lastCommitAt.value = 0;
+        runOnJS(dispatchBegin)();
+      })
+      .onUpdate((e) => {
+        "worklet";
+        const width = trackWidth.value || 1;
+        const deltaRatio = e.translationX / width;
+        const deltaMs = deltaRatio * TIME_TRAVEL_RANGE_MS * 2;
+        const next = Math.max(
+          -TIME_TRAVEL_RANGE_MS,
+          Math.min(TIME_TRAVEL_RANGE_MS, startOffset.value + deltaMs)
+        );
+        liveOffset.value = next;
+
+        const minute = Math.round(next / MINUTE_MS);
+        pendingMinute.value = minute;
+        if (minute === lastPushedMinute.value) return;
+
+        const now = performance.now();
+        if (now - lastCommitAt.value < SCRUB_COMMIT_MIN_MS) return;
+
+        lastCommitAt.value = now;
+        lastPushedMinute.value = minute;
+        runOnJS(dispatchCommit)(minute * MINUTE_MS);
+      })
+      .onEnd(() => {
+        "worklet";
+        const snapped = pendingMinute.value * MINUTE_MS;
+        liveOffset.value = snapped;
+        lastPushedMinute.value = pendingMinute.value;
+        runOnJS(dispatchEnd)(snapped);
+      });
+
+    const tap = Gesture.Tap().onEnd((e) => {
       "worklet";
       const width = trackWidth.value || 1;
-      const deltaRatio = e.translationX / width;
-      const deltaMs = deltaRatio * TIME_TRAVEL_RANGE_MS * 2;
-      const next = Math.max(
-        -TIME_TRAVEL_RANGE_MS,
-        Math.min(TIME_TRAVEL_RANGE_MS, startOffset.value + deltaMs)
-      );
-      liveOffset.value = next;
-
-      const minute = Math.round(next / MINUTE_MS);
-      pendingMinute.value = minute;
-      if (minute === lastPushedMinute.value) return;
-
-      const now = performance.now();
-      if (now - lastCommitAt.value < SCRUB_COMMIT_MIN_MS) return;
-
-      lastCommitAt.value = now;
-      lastPushedMinute.value = minute;
-      runOnJS(commitScrub)(minute * MINUTE_MS);
-    })
-    .onEnd(() => {
-      "worklet";
-      const snapped = pendingMinute.value * MINUTE_MS;
+      const ratio = Math.max(0, Math.min(1, e.x / width));
+      const next = ratio * TIME_TRAVEL_RANGE_MS * 2 - TIME_TRAVEL_RANGE_MS;
+      const snapped = Math.round(next / MINUTE_MS) * MINUTE_MS;
       liveOffset.value = snapped;
-      lastPushedMinute.value = pendingMinute.value;
-      runOnJS(onEnd)(snapped);
+      lastPushedMinute.value = Math.round(snapped / MINUTE_MS);
+      pendingMinute.value = lastPushedMinute.value;
+      runOnJS(dispatchBegin)();
+      runOnJS(dispatchCommit)(snapped);
+      runOnJS(dispatchEnd)(snapped);
     });
 
-  const tap = Gesture.Tap().onEnd((e) => {
-    "worklet";
-    const width = trackWidth.value || 1;
-    const ratio = Math.max(0, Math.min(1, e.x / width));
-    const next = ratio * TIME_TRAVEL_RANGE_MS * 2 - TIME_TRAVEL_RANGE_MS;
-    const snapped = Math.round(next / MINUTE_MS) * MINUTE_MS;
-    liveOffset.value = snapped;
-    lastPushedMinute.value = Math.round(snapped / MINUTE_MS);
-    pendingMinute.value = lastPushedMinute.value;
-    runOnJS(onBegin)();
-    runOnJS(commitScrub)(snapped);
-    runOnJS(onEnd)(snapped);
-  });
-
-  const gesture = Gesture.Race(pan, tap);
+    return Gesture.Race(pan, tap);
+  }, [
+    dispatchBegin,
+    dispatchCommit,
+    dispatchEnd,
+    lastCommitAt,
+    lastPushedMinute,
+    liveOffset,
+    pendingMinute,
+    startOffset,
+    trackWidth,
+  ]);
 
   const thumbStyle = useAnimatedStyle(() => {
     const progress =
@@ -176,7 +220,6 @@ export function TimeTravelBar({ dark }: Props): JSX.Element {
 
   const muted = isDark ? "rgba(255,255,255,0.55)" : "rgba(0,0,0,0.45)";
   const text = isDark ? "#FFFFFF" : "#111111";
-  // Thin track only — not a full card fill
   const trackBg = isDark ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.08)";
   const fillColor = isDark
     ? "rgba(225, 29, 72, 0.4)"
@@ -208,6 +251,7 @@ export function TimeTravelBar({ dark }: Props): JSX.Element {
                 liveOffset.value = 0;
                 lastPushedMinute.value = 0;
                 pendingMinute.value = 0;
+                setLabelOffset(0);
                 resetToNow();
                 void Haptics.notificationAsync(
                   Haptics.NotificationFeedbackType.Success
@@ -267,7 +311,6 @@ const styles = StyleSheet.create({
     shadowRadius: 16,
   },
   cardDark: {
-    // Solid shell matching the floating tab bar
     backgroundColor: "rgba(28, 28, 30, 0.94)",
     borderColor: "rgba(255, 255, 255, 0.14)",
   },
@@ -349,7 +392,6 @@ const styles = StyleSheet.create({
     height: "100%",
   },
   trackHit: {
-    // Transparent hit area only — never a second plate behind the track
     backgroundColor: "transparent",
     paddingVertical: 4,
   },

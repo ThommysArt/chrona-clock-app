@@ -1,3 +1,4 @@
+import { startTransition } from "react";
 import { create } from "zustand";
 
 import { TIME_TRAVEL_RANGE_MS, TICK_MS } from "@/lib/constants";
@@ -60,11 +61,17 @@ export const useTimeStore = create<TimeState>((set, get) => ({
     const prev = get().offsetMs;
     // Skip identical minute — paired with UI-thread throttle on the slider
     if (offsetMs === prev) return;
-    // Keep store writes minimal while dragging; consumers re-render from this
-    set({
-      offsetMs,
-      nowMs: Date.now() + offsetMs,
-      isScrubbing: true,
+    // Transition priority so gesture JS / slider chrome stay ahead of list work.
+    // Drop the write if scrub already ended (stale deferred commit).
+    startTransition(() => {
+      set((state) => {
+        if (!state.isScrubbing) return state;
+        if (state.offsetMs === offsetMs) return state;
+        return {
+          offsetMs,
+          nowMs: Date.now() + offsetMs,
+        };
+      });
     });
   },
 
