@@ -2,6 +2,7 @@ import { create } from "zustand";
 
 import * as db from "@/lib/db";
 import type { AppSettings, ThemePreference } from "@/lib/db";
+import { syncHomeScreenWidgets } from "@/widgets/sync-widgets";
 
 export type { ThemePreference };
 
@@ -28,6 +29,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set({ use24Hour: value });
     try {
       await db.saveSettings({ use24Hour: value, theme: get().theme });
+      void syncHomeScreenWidgets().catch(() => undefined);
     } catch (e) {
       console.warn("[chrona] failed to persist use24Hour", e);
       set({ use24Hour: prev });

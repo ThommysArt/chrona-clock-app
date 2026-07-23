@@ -20,6 +20,7 @@ import { bootstrapDatabase } from "@/lib/db";
 import { hydrateCitiesStore } from "@/store/cities-store";
 import { hydrateSettingsStore } from "@/store/settings-store";
 import { hydrateTimeStore, startTimeEngine } from "@/store/time-store";
+import { syncHomeScreenWidgets } from "@/widgets/sync-widgets";
 
 import "../global.css";
 
@@ -73,6 +74,16 @@ export default function RootLayout(): JSX.Element | null {
   useEffect(() => {
     if (!dbReady) return;
     return startTimeEngine();
+  }, [dbReady]);
+
+  // Keep home-screen widgets in sync while the app is open (every minute)
+  useEffect(() => {
+    if (!dbReady) return;
+    void syncHomeScreenWidgets().catch(() => undefined);
+    const id = setInterval(() => {
+      void syncHomeScreenWidgets().catch(() => undefined);
+    }, 60_000);
+    return () => clearInterval(id);
   }, [dbReady]);
 
   useEffect(() => {

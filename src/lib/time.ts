@@ -90,14 +90,32 @@ function readZonedMap(
   return map;
 }
 
-/** Offset of timezone vs UTC at epochMs, in minutes */
+/**
+ * Offset of timezone vs UTC at epochMs, in minutes.
+ * Builds wall time in the zone via Intl parts, then diffs against the epoch —
+ * more reliable than the `toLocaleString` → `Date` parse trick (can yield NaN
+ * in headless widget JS contexts).
+ */
 function offsetMinutesAt(timezone: string, epochMs: number): number {
-  // Compare the same instant formatted in UTC vs zone (locale string trick)
-  const d = new Date(epochMs);
-  const utc = new Date(d.toLocaleString("en-US", { timeZone: "UTC" }));
+  if (!timezone) return 0;
   try {
-    const local = new Date(d.toLocaleString("en-US", { timeZone: timezone }));
-    return Math.round((local.getTime() - utc.getTime()) / 60_000);
+    const map = readZonedMap(timezone, epochMs);
+    let hour = Number.parseInt(map.hour ?? "0", 10);
+    if (hour === 24) hour = 0;
+    const minute = Number.parseInt(map.minute ?? "0", 10);
+    const second = Number.parseInt(map.second ?? "0", 10);
+    const day = Number.parseInt(map.day ?? "1", 10);
+    const month = Number.parseInt(map.month ?? "1", 10);
+    const year = Number.parseInt(map.year ?? "1970", 10);
+    if (
+      ![hour, minute, second, day, month, year].every((n) => Number.isFinite(n))
+    ) {
+      return 0;
+    }
+    // Interpret zone wall time as if it were UTC, then subtract real epoch
+    const asUtcMs = Date.UTC(year, month - 1, day, hour, minute, second);
+    if (!Number.isFinite(asUtcMs)) return 0;
+    return Math.round((asUtcMs - epochMs) / 60_000);
   } catch {
     return 0;
   }
@@ -199,7 +217,11 @@ export function formatRelativeOffset(
   const device = getZonedParts(deviceTz, offsetMs, true);
 
   // Prefer offset-based diff to avoid DST edge confusion
-  const diffMinutes = city.offsetMinutes - device.offsetMinutes;
+  const cityOff = Number.isFinite(city.offsetMinutes) ? city.offsetMinutes : 0;
+  const deviceOff = Number.isFinite(device.offsetMinutes)
+    ? device.offsetMinutes
+    : 0;
+  const diffMinutes = cityOff - deviceOff;
   const diffHours = diffMinutes / 60;
 
   let dayRelation = "Today";
@@ -213,7 +235,7 @@ export function formatRelativeOffset(
     dayRelation = cityDayNum < deviceDayNum ? "Yesterday" : "Tomorrow";
   }
 
-  if (Math.abs(diffHours) < 0.01) {
+  if (!Number.isFinite(diffHours) || Math.abs(diffHours) < 0.01) {
     return dayRelation;
   }
 
