@@ -8,6 +8,11 @@ import {
 } from "@/lib/cities";
 import { type CityDefinition, DEFAULT_CITIES } from "@/lib/constants";
 import * as db from "@/lib/db";
+import { syncHomeScreenWidgets } from "@/widgets/sync-widgets";
+
+function queueSyncWidgets(): void {
+  void syncHomeScreenWidgets().catch(() => undefined);
+}
 
 type CitiesState = {
   cities: CityDefinition[];
@@ -60,6 +65,7 @@ export const useCitiesStore = create<CitiesState>((set, get) => ({
     set({ cities: next });
     try {
       await db.insertSavedCity(withCustomFlag(city, false), next.length - 1);
+      queueSyncWidgets();
     } catch (e) {
       console.warn("[chrona] failed to persist addCity", e);
       set({ cities });
@@ -82,6 +88,7 @@ export const useCitiesStore = create<CitiesState>((set, get) => ({
           )
         )
       );
+      queueSyncWidgets();
     } catch (e) {
       console.warn("[chrona] failed to persist removeCity", e);
       set({ cities: prev });
@@ -100,6 +107,7 @@ export const useCitiesStore = create<CitiesState>((set, get) => ({
       await db.replaceSavedCities(
         next.map((c) => withCustomFlag(c, customIds.has(c.id)))
       );
+      queueSyncWidgets();
     } catch (e) {
       console.warn("[chrona] failed to persist reorder", e);
       set({ cities: prev });
@@ -140,6 +148,7 @@ export const useCitiesStore = create<CitiesState>((set, get) => ({
         withCustomFlag(city, true),
         nextCities.length - 1
       );
+      queueSyncWidgets();
     } catch (e) {
       console.warn("[chrona] failed to persist createCustomPlace", e);
       set({ cities, customPlaces });
@@ -197,4 +206,5 @@ export async function hydrateCitiesStore(snapshot?: {
     customPlaces: fixedCustom,
     ready: true,
   });
+  queueSyncWidgets();
 }
