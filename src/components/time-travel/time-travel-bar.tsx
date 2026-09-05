@@ -460,19 +460,19 @@ const styles = StyleSheet.create({
     fontWeight: "500",
   },
   thumb: {
-    marginLeft: -11,
+    marginLeft: -23,
     position: "absolute",
-    top: -5,
+    top: -10,
   },
   thumbKnob: {
     backgroundColor: "#FFFFFF",
     borderColor: "rgba(0,0,0,0.06)",
-    borderRadius: 12,
+    borderRadius: 13,
     borderWidth: StyleSheet.hairlineWidth,
-    boxShadow: "0px 2px 6px rgba(0, 0, 0, 0.2)",
+    boxShadow: "0px 3px 8px rgba(0, 0, 0, 0.22)",
     elevation: 4,
-    height: 22,
-    width: 22,
+    height: 26,
+    width: 46,
   },
   track: {
     borderRadius: 3,
@@ -487,6 +487,9 @@ const styles = StyleSheet.create({
   },
   trackHit: {
     backgroundColor: "transparent",
+    // Half-knob (23) minus card padding (16) so the wide pill never clips
+    // at the extremes. Margin keeps the onLayout width === track width.
+    marginHorizontal: 7,
     paddingVertical: 4,
   },
 });
