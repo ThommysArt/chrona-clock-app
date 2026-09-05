@@ -41,15 +41,21 @@ const { Canvas } = (
     : require("@react-three/fiber/native")
 ) as { Canvas: ComponentType<Record<string, unknown>> };
 
-// NASA Blue Marble / three-globe assets (bundled)
-const EARTH_DAY = require("../../../assets/earth/earth-day.jpg");
-const EARTH_NIGHT = require("../../../assets/earth/earth-night.jpg");
-const EARTH_TOPO = require("../../../assets/earth/earth-topology.png");
+// Flat digital base (generated from Natural Earth 110m) + vector overlays
+const EARTH_BASE = require("../../../assets/earth/earth-digital-base.png");
+
+// Natural Earth 110m country borders (bundled GeoJSON via Metro JSON require)
+type CountryGeometry =
+  | { type: "Polygon"; coordinates: [number, number][][] }
+  | { type: "MultiPolygon"; coordinates: [number, number][][][] }
+  | { type: string; coordinates: unknown };
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const COUNTRIES = require("../../../assets/earth/countries-110m.json") as {
+  features: { geometry: CountryGeometry | null }[];
+};
 
 type EarthMaps = {
   day: THREE.Texture;
-  night: THREE.Texture;
-  topo: THREE.Texture;
 };
 
 function applyTextureDefaults(tex: THREE.Texture, isColor = true): THREE.Texture {
@@ -67,6 +73,97 @@ function solidTexture(r: number, g: number, b: number): THREE.Texture {
   const data = new Uint8Array([r, g, b, 255]);
   const tex = new THREE.DataTexture(data, 1, 1);
   return applyTextureDefaults(tex);
+}
+
+const BORDER_RADIUS = 1.004;
+const GRATICULE_RADIUS = 1.0018;
+
+function pushSegment(
+  out: number[],
+  latA: number,
+  lonA: number,
+  latB: number,
+  lonB: number,
+  radius: number
+): void {
+  // Split at the antimeridian so borders don't smear across the map
+  if (Math.abs(lonA - lonB) > 180) return;
+  const [ax, ay, az] = latLonToVector3(latA, lonA, radius);
+  const [bx, by, bz] = latLonToVector3(latB, lonB, radius);
+  out.push(ax, ay, az, bx, by, bz);
+}
+
+function buildBorderPositions(): Float32Array {
+  const out: number[] = [];
+  for (const feature of COUNTRIES.features) {
+    const geometry = feature.geometry;
+    if (!geometry) continue;
+    const polygons =
+      geometry.type === "Polygon"
+        ? [(geometry.coordinates as [number, number][][])]
+        : geometry.type === "MultiPolygon"
+          ? (geometry.coordinates as [number, number][][][])
+          : [];
+    for (const polygon of polygons) {
+      for (const ring of polygon) {
+        for (let i = 0; i + 1 < ring.length; i++) {
+          const a = ring[i]!;
+          const b = ring[i + 1]!;
+          pushSegment(out, a[1]!, a[0]!, b[1]!, b[0]!, BORDER_RADIUS);
+        }
+      }
+    }
+  }
+  return new Float32Array(out);
+}
+
+function buildGraticulePositions(step = 15, sample = 2): Float32Array {
+  const out: number[] = [];
+  for (let lon = -180; lon < 180; lon += step) {
+    for (let lat = -90; lat < 90; lat += sample) {
+      pushSegment(
+        out,
+        lat,
+        lon,
+        Math.min(lat + sample, 90),
+        lon,
+        GRATICULE_RADIUS
+      );
+    }
+  }
+  for (let lat = -75; lat <= 75; lat += step) {
+    for (let lon = -180; lon < 180; lon += sample) {
+      pushSegment(out, lat, lon, lat, lon + sample, GRATICULE_RADIUS);
+    }
+  }
+  return new Float32Array(out);
+}
+
+let cachedBorderGeometry: THREE.BufferGeometry | null = null;
+let cachedGraticuleGeometry: THREE.BufferGeometry | null = null;
+
+function getBorderGeometry(): THREE.BufferGeometry {
+  if (!cachedBorderGeometry) {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute(
+      "position",
+      new THREE.BufferAttribute(buildBorderPositions(), 3)
+    );
+    cachedBorderGeometry = geometry;
+  }
+  return cachedBorderGeometry;
+}
+
+function getGraticuleGeometry(): THREE.BufferGeometry {
+  if (!cachedGraticuleGeometry) {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute(
+      "position",
+      new THREE.BufferAttribute(buildGraticulePositions(), 3)
+    );
+    cachedGraticuleGeometry = geometry;
+  }
+  return cachedGraticuleGeometry;
 }
 
 /**
@@ -162,13 +259,9 @@ function useEarthMaps(): { maps: EarthMaps | null; error: string | null } {
     let cancelled = false;
     void (async () => {
       try {
-        const [day, night, topo] = await Promise.all([
-          loadTexture(EARTH_DAY),
-          loadTexture(EARTH_NIGHT),
-          loadTexture(EARTH_TOPO),
-        ]);
+        const [day] = await Promise.all([loadTexture(EARTH_BASE)]);
         if (!cancelled) {
-          setMaps({ day, night, topo });
+          setMaps({ day });
           setError(null);
         }
       } catch {
@@ -177,9 +270,7 @@ function useEarthMaps(): { maps: EarthMaps | null; error: string | null } {
         if (!cancelled) {
           setError("fallback");
           setMaps({
-            day: solidTexture(40, 100, 180),
-            night: solidTexture(8, 16, 40),
-            topo: solidTexture(80, 80, 80),
+            day: solidTexture(16, 16, 20),
           });
         }
       }
@@ -242,7 +333,6 @@ function EarthWithPins({
   useFrame((_, delta) => {
     const group = groupRef.current;
     if (!group) return;
-
     group.rotation.y += delta * 0.012;
 
     // ~8fps label projection — enough for motion, cheap on JS
@@ -290,22 +380,40 @@ function EarthWithPins({
   // Align equirectangular texture so (0,0) sits at the expected meridian
   const textureYaw = Math.PI;
 
+  // Static vector overlays — built once from bundled 110m borders + graticule
+  const borderGeometry = useMemo(() => getBorderGeometry(), []);
+  const graticuleGeometry = useMemo(() => getGraticuleGeometry(), []);
+
   return (
     <group ref={groupRef} rotation={[0, textureYaw, 0]}>
       <mesh>
         <sphereGeometry args={[1, 72, 72]} />
         <meshStandardMaterial
-          bumpMap={maps.topo}
-          bumpScale={0.02}
-          emissive={new THREE.Color("#243a58")}
-          emissiveIntensity={0.55}
-          emissiveMap={maps.night}
           map={maps.day}
-          metalness={0.01}
-          roughness={0.68}
-          roughnessMap={maps.topo}
+          metalness={0.05}
+          roughness={0.92}
         />
       </mesh>
+
+      {/* Country borders — crisp vector strokes above the flat fills */}
+      <lineSegments geometry={borderGeometry}>
+        <lineBasicMaterial
+          color="#a1a1aa"
+          depthWrite={false}
+          opacity={0.55}
+          transparent
+        />
+      </lineSegments>
+
+      {/* Lat/long graticule — faint digital-scan grid */}
+      <lineSegments geometry={graticuleGeometry}>
+        <lineBasicMaterial
+          color="#71717a"
+          depthWrite={false}
+          opacity={0.28}
+          transparent
+        />
+      </lineSegments>
 
       {/* Atmosphere glow */}
       <mesh scale={1.028}>
