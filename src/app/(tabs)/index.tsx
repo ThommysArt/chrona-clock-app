@@ -9,11 +9,15 @@ import {
   useFloatingChromeInsets,
 } from "@/components/ui/tab-screen-shell";
 import { useCitiesStore } from "@/store/cities-store";
+import { useRemindersStore } from "@/store/reminders-store";
 
 export default function ListTab(): JSX.Element {
   const { searchOpen, openSearch, onSearchOpenChange } = useCitySearch();
   const cities = useCitiesStore((s) => s.cities);
   const removeCity = useCitiesStore((s) => s.removeCity);
+  const removeRemindersForCity = useRemindersStore(
+    (s) => s.removeRemindersForCity
+  );
   const colorScheme = useColorScheme();
   const isDark = colorScheme === "dark";
   const chrome = useFloatingChromeInsets();
@@ -63,6 +67,7 @@ export default function ListTab(): JSX.Element {
               isLast={index === cities.length - 1}
               key={city.id}
               onRemove={() => {
+                void removeRemindersForCity(city.id).catch(() => undefined);
                 void removeCity(city.id);
               }}
             />

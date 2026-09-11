@@ -17,7 +17,12 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 
 import { ACCENT, DEFAULT_CITIES } from "@/lib/constants";
 import { bootstrapDatabase } from "@/lib/db";
+import { setupReminderNotifications } from "@/lib/reminders/notification-service";
 import { hydrateCitiesStore } from "@/store/cities-store";
+import {
+  hydrateRemindersStore,
+  startReminderTicker,
+} from "@/store/reminders-store";
 import { hydrateSettingsStore } from "@/store/settings-store";
 import { hydrateTimeStore, startTimeEngine } from "@/store/time-store";
 import { syncHomeScreenWidgets } from "@/widgets/sync-widgets";
@@ -50,7 +55,10 @@ export default function RootLayout(): JSX.Element | null {
           }),
           hydrateSettingsStore(snapshot.settings),
           hydrateTimeStore(snapshot.offsetMs),
+          hydrateRemindersStore(),
         ]);
+        // Native channel + foreground handler; no-op on web.
+        await setupReminderNotifications().catch(() => undefined);
       } catch (e) {
         console.warn("[chrona] database bootstrap failed", e);
         // In-memory defaults so the UI still launches
@@ -74,6 +82,12 @@ export default function RootLayout(): JSX.Element | null {
   useEffect(() => {
     if (!dbReady) return;
     return startTimeEngine();
+  }, [dbReady]);
+
+  // Fire due reminders in the foreground (web Notification API; no-op-ish native)
+  useEffect(() => {
+    if (!dbReady) return;
+    return startReminderTicker();
   }, [dbReady]);
 
   // Keep home-screen widgets in sync while the app is open (every minute)

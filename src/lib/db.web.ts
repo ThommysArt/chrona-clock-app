@@ -1,7 +1,4 @@
-import {
-  type CityDefinition,
-  DEFAULT_CITIES,
-} from "@/lib/constants";
+import { type CityDefinition, DEFAULT_CITIES } from "@/lib/constants";
 
 export type ThemePreference = "light" | "dark" | "system";
 
@@ -12,11 +9,28 @@ export type AppSettings = {
 
 type StoredCity = CityDefinition & { isCustom?: boolean; sortOrder: number };
 
+export type ReminderRow = {
+  id: string;
+  cityId: string;
+  cityLabel: string;
+  timezone: string;
+  targetEpochMs: number;
+  title: string;
+  note: string;
+  createdAtMs: number;
+  notificationId: string | null;
+  calendarEventId: string | null;
+  notifyEnabled: boolean;
+  calendarEnabled: boolean;
+  fired: boolean;
+};
+
 type WebDbShape = {
   cities: StoredCity[];
   settings: AppSettings;
   offsetMs: number;
   meta: Record<string, string>;
+  reminders: ReminderRow[];
 };
 
 const STORAGE_KEY = "chrona.db.v1";
@@ -31,6 +45,7 @@ function defaults(): WebDbShape {
     settings: { use24Hour: true, theme: "system" },
     offsetMs: 0,
     meta: {},
+    reminders: [],
   };
 }
 
@@ -44,12 +59,11 @@ function readStorage(): WebDbShape {
       cities: Array.isArray(parsed.cities) ? parsed.cities : base.cities,
       settings: { ...base.settings, ...parsed.settings },
       offsetMs:
-        typeof parsed.offsetMs === "number" &&
-        Number.isFinite(parsed.offsetMs)
+        typeof parsed.offsetMs === "number" && Number.isFinite(parsed.offsetMs)
           ? parsed.offsetMs
           : 0,
-      meta:
-        parsed.meta && typeof parsed.meta === "object" ? parsed.meta : {},
+      meta: parsed.meta && typeof parsed.meta === "object" ? parsed.meta : {},
+      reminders: Array.isArray(parsed.reminders) ? parsed.reminders : [],
     };
   } catch {
     return base;
@@ -64,19 +78,13 @@ function writeStorage(state: WebDbShape): void {
   }
 }
 
-function sortedCities(
-  cities: StoredCity[]
-): (CityDefinition & { isCustom?: boolean })[] {
+function sortedCities(cities: StoredCity[]): (CityDefinition & { isCustom?: boolean })[] {
   return [...cities]
-    .sort(
-      (a, b) => a.sortOrder - b.sortOrder || a.label.localeCompare(b.label)
-    )
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.label.localeCompare(b.label))
     .map(({ sortOrder: _sortOrder, ...rest }) => rest);
 }
 
-export async function listSavedCities(): Promise<
-  (CityDefinition & { isCustom?: boolean })[]
-> {
+export async function listSavedCities(): Promise<(CityDefinition & { isCustom?: boolean })[]> {
   return sortedCities(readStorage().cities);
 }
 
@@ -137,10 +145,7 @@ export async function setSetting(key: string, value: string): Promise<void> {
   const state = readStorage();
   if (key === "use24Hour") {
     state.settings.use24Hour = value === "true";
-  } else if (
-    key === "theme" &&
-    (value === "light" || value === "dark" || value === "system")
-  ) {
+  } else if (key === "theme" && (value === "light" || value === "dark" || value === "system")) {
     state.settings.theme = value;
   } else if (key === "offsetMs") {
     const n = Number(value);
@@ -181,8 +186,7 @@ export async function setMeta(key: string, value: string): Promise<void> {
   writeStorage(state);
 }
 
-/**
- * Open DB, seed defaults on first run, return current rows.
+/** Open DB, seed defaults on first run, return current rows.
  * Call once at app boot before rendering main UI.
  */
 export async function bootstrapDatabase(): Promise<{
@@ -209,4 +213,33 @@ export async function bootstrapDatabase(): Promise<{
   ]);
 
   return { cities, customPlaces, settings, offsetMs };
+}
+
+export async function listReminders(): Promise<ReminderRow[]> {
+  return [...readStorage().reminders].sort((a, b) => a.targetEpochMs - b.targetEpochMs);
+}
+
+export async function insertReminder(row: ReminderRow): Promise<void> {
+  const state = readStorage();
+  state.reminders = state.reminders.filter((r) => r.id !== row.id);
+  state.reminders.push(row);
+  writeStorage(state);
+}
+
+export async function updateReminder(id: string, patch: Partial<ReminderRow>): Promise<void> {
+  const state = readStorage();
+  state.reminders = state.reminders.map((r) => (r.id === id ? { ...r, ...patch, id } : r));
+  writeStorage(state);
+}
+
+export async function deleteReminder(id: string): Promise<void> {
+  const state = readStorage();
+  state.reminders = state.reminders.filter((r) => r.id !== id);
+  writeStorage(state);
+}
+
+export async function deleteRemindersForCity(cityId: string): Promise<void> {
+  const state = readStorage();
+  state.reminders = state.reminders.filter((r) => r.cityId !== cityId);
+  writeStorage(state);
 }

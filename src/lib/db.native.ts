@@ -1,9 +1,6 @@
 import * as SQLite from "expo-sqlite";
 
-import {
-  type CityDefinition,
-  DEFAULT_CITIES,
-} from "@/lib/constants";
+import { type CityDefinition, DEFAULT_CITIES } from "@/lib/constants";
 
 export type ThemePreference = "light" | "dark" | "system";
 
@@ -55,6 +52,26 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
           key TEXT PRIMARY KEY NOT NULL,
           value TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS reminders (
+          id TEXT PRIMARY KEY NOT NULL,
+          city_id TEXT NOT NULL,
+          city_label TEXT NOT NULL,
+          timezone TEXT NOT NULL,
+          target_epoch_ms INTEGER NOT NULL,
+          title TEXT NOT NULL,
+          note TEXT NOT NULL DEFAULT '',
+          created_at_ms INTEGER NOT NULL,
+          notification_id TEXT,
+          calendar_event_id TEXT,
+          notify_enabled INTEGER NOT NULL DEFAULT 1,
+          calendar_enabled INTEGER NOT NULL DEFAULT 0,
+          fired INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_reminders_target
+          ON reminders (target_epoch_ms);
+        CREATE INDEX IF NOT EXISTS idx_reminders_city
+          ON reminders (city_id);
       `);
       return db;
     })();
@@ -74,9 +91,7 @@ function rowToCity(row: CityRow): CityDefinition & { isCustom?: boolean } {
   };
 }
 
-export async function listSavedCities(): Promise<
-  (CityDefinition & { isCustom?: boolean })[]
-> {
+export async function listSavedCities(): Promise<(CityDefinition & { isCustom?: boolean })[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<CityRow>(
     `SELECT id, label, region, timezone, latitude, longitude, sort_order, is_custom
@@ -185,10 +200,7 @@ export async function loadSettings(): Promise<AppSettings> {
   const theme = await getSetting("theme");
   return {
     use24Hour: use24 == null ? true : use24 === "true",
-    theme:
-      theme === "light" || theme === "dark" || theme === "system"
-        ? theme
-        : "system",
+    theme: theme === "light" || theme === "dark" || theme === "system" ? theme : "system",
   };
 }
 
@@ -258,4 +270,119 @@ export async function bootstrapDatabase(): Promise<{
   ]);
 
   return { cities, customPlaces, settings, offsetMs };
+}
+
+// ---------------------------------------------------------------------------
+// Reminders
+// ---------------------------------------------------------------------------
+
+export type ReminderRow = {
+  id: string;
+  cityId: string;
+  cityLabel: string;
+  timezone: string;
+  targetEpochMs: number;
+  title: string;
+  note: string;
+  createdAtMs: number;
+  notificationId: string | null;
+  calendarEventId: string | null;
+  notifyEnabled: boolean;
+  calendarEnabled: boolean;
+  fired: boolean;
+};
+
+type ReminderDbRow = {
+  id: string;
+  city_id: string;
+  city_label: string;
+  timezone: string;
+  target_epoch_ms: number;
+  title: string;
+  note: string;
+  created_at_ms: number;
+  notification_id: string | null;
+  calendar_event_id: string | null;
+  notify_enabled: number;
+  calendar_enabled: number;
+  fired: number;
+};
+
+function reminderRowToDomain(row: ReminderDbRow): ReminderRow {
+  return {
+    id: row.id,
+    cityId: row.city_id,
+    cityLabel: row.city_label,
+    timezone: row.timezone,
+    targetEpochMs: row.target_epoch_ms,
+    title: row.title,
+    note: row.note ?? "",
+    createdAtMs: row.created_at_ms,
+    notificationId: row.notification_id,
+    calendarEventId: row.calendar_event_id,
+    notifyEnabled: row.notify_enabled === 1,
+    calendarEnabled: row.calendar_enabled === 1,
+    fired: row.fired === 1,
+  };
+}
+
+export async function listReminders(): Promise<ReminderRow[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<ReminderDbRow>(
+    `SELECT id, city_id, city_label, timezone, target_epoch_ms, title, note,
+            created_at_ms, notification_id, calendar_event_id,
+            notify_enabled, calendar_enabled, fired
+     FROM reminders
+     ORDER BY target_epoch_ms ASC`
+  );
+  return rows.map(reminderRowToDomain);
+}
+
+export async function insertReminder(row: ReminderRow): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    `INSERT OR REPLACE INTO reminders
+      (id, city_id, city_label, timezone, target_epoch_ms, title, note,
+       created_at_ms, notification_id, calendar_event_id,
+       notify_enabled, calendar_enabled, fired)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    row.id,
+    row.cityId,
+    row.cityLabel,
+    row.timezone,
+    row.targetEpochMs,
+    row.title,
+    row.note,
+    row.createdAtMs,
+    row.notificationId,
+    row.calendarEventId,
+    row.notifyEnabled ? 1 : 0,
+    row.calendarEnabled ? 1 : 0,
+    row.fired ? 1 : 0
+  );
+}
+
+export async function updateReminder(id: string, patch: Partial<ReminderRow>): Promise<void> {
+  const db = await getDb();
+  const current = await db.getFirstAsync<ReminderDbRow>(
+    `SELECT id, city_id, city_label, timezone, target_epoch_ms, title, note,
+            created_at_ms, notification_id, calendar_event_id,
+            notify_enabled, calendar_enabled, fired
+     FROM reminders WHERE id = ?`,
+    id
+  );
+  if (!current) return;
+  const next = reminderRowToDomain(current);
+  const merged: ReminderRow = { ...next, ...patch, id };
+  await insertReminder(merged);
+}
+
+export async function deleteReminder(id: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(`DELETE FROM reminders WHERE id = ?`, id);
+}
+
+export async function deleteRemindersForCity(cityId: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(`DELETE FROM reminders WHERE city_id = ?`, cityId);
 }
