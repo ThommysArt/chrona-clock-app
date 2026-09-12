@@ -114,6 +114,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     android: {
       package: packageId,
       versionCode,
+      permissions: ["SCHEDULE_EXACT_ALARM"],
       adaptiveIcon: {
         foregroundImage: "./assets/images/adaptive-icon.png",
         backgroundColor: "#eeeeee",
@@ -123,6 +124,18 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     plugins: [
       "expo-router",
       "expo-font",
+      [
+        "expo-notifications",
+        {
+          color: "#E11D48",
+        },
+      ],
+      [
+        "expo-calendar",
+        {
+          calendarPermission: "Chrona needs calendar access to add your reminders.",
+        },
+      ],
       [
         "expo-splash-screen",
         {
@@ -156,11 +169,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
               displayName: `Chrona World Clock${widgetSuffix}`,
               description: "Times for your saved cities",
               contentMarginsDisabled: true,
-              supportedFamilies: [
-                "systemSmall",
-                "systemMedium",
-                "systemLarge",
-              ],
+              supportedFamilies: ["systemSmall", "systemMedium", "systemLarge"],
             },
             {
               name: "ChronaClock",
